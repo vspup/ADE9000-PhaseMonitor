@@ -1,0 +1,99 @@
+# =============================================================================
+# ADE9000-PhaseMonitor — .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Arduino / Embedded
+# -----------------------------------------------------------------------------
+
+# Arduino IDE build output
+firmware/**/build/
+firmware/**/.arduino15/
+
+# Compiled binaries
+*.elf
+*.hex
+*.bin
+*.map
+*.eep
+
+# Arduino IDE temp / cache
+*.ino.globals.h
+
+# -----------------------------------------------------------------------------
+# Python (PC application)
+# -----------------------------------------------------------------------------
+
+# Bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+
+# -----------------------------------------------------------------------------
+# Data files — measurement logs (can be large; keep folder via .gitkeep)
+# -----------------------------------------------------------------------------
+
+data/*.csv
+data/*.jsonl
+data/*.json
+data/*.log
+data/*.txt
+
+# Keep the folder itself
+!data/.gitkeep
+
+# -----------------------------------------------------------------------------
+# IDE and editors
+# -----------------------------------------------------------------------------
+
+# VS Code — keep shared launch/task configs, ignore personal settings
+.vscode/settings.json
+.vscode/extensions.json
+
+# JetBrains
+.idea/
+
+# Windows
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# -----------------------------------------------------------------------------
+# Secrets / local config
+# -----------------------------------------------------------------------------
+
+.env
+*.local
+secrets.*
+
+# -----------------------------------------------------------------------------
+# Claude Code
+# -----------------------------------------------------------------------------
+
+.claude/settings.local.json

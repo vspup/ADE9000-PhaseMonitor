@@ -1,0 +1,23 @@
+# Normalize line endings: LF in repo, CRLF on Windows checkout
+* text=auto
+
+# Arduino / C++ source — always LF
+*.ino  text eol=lf
+*.cpp  text eol=lf
+*.h    text eol=lf
+
+# Docs and config — LF
+*.md   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.txt  text eol=lf
+*.csv  text eol=lf
+
+# Binaries — no conversion
+*.pdf  binary
+*.png  binary
+*.jpg  binary
+*.bin  binary
+*.elf  binary
+*.hex  binary
