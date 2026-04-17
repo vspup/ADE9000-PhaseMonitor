@@ -37,13 +37,14 @@ class ControlPanel(QWidget):
         layout.addWidget(self._build_values_group())
         layout.addWidget(self._build_display_group())
         layout.addWidget(self._build_logging_group())
-        layout.addStretch()
 
         self.btn_calibrate = QPushButton('Calibrate…')
         self.btn_calibrate.setEnabled(False)
         self.btn_calibrate.setToolTip('Connect to device first')
         self.btn_calibrate.clicked.connect(self.calibration_requested)
         layout.addWidget(self.btn_calibrate)
+
+        layout.addStretch()
 
     # ------------------------------------------------------------------
     def _build_values_group(self) -> QGroupBox:
