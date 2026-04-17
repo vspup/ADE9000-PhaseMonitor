@@ -173,6 +173,9 @@ class MainWindow(QMainWindow):
             self.lbl_status.setStyleSheet('color: #51cf66; padding: 0 8px;')
             self.ctrl.btn_calibrate.setEnabled(True)
             self.ctrl.btn_calibrate.setToolTip('')
+            # Push the pre-selected mode to firmware so it matches the UI.
+            selected = self.ctrl.cmb_mode.currentData()
+            self._reader.send_command(f'SET MODE {selected.value}')
         else:
             self.btn_connect.setText('Connect')
             self.lbl_status.setText('●  Disconnected')
