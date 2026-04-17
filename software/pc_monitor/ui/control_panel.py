@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton,
-    QSpinBox, QGroupBox, QFileDialog, QGridLayout,
+    QSpinBox, QGroupBox, QFileDialog, QGridLayout, QCheckBox,
 )
 from PySide6.QtCore import Signal
 
@@ -20,9 +20,10 @@ _COLORS = {
 
 
 class ControlPanel(QWidget):
-    history_changed      = Signal(float)   # seconds
-    log_start_requested  = Signal(str)     # directory path
-    log_stop_requested   = Signal()
+    history_changed          = Signal(float)        # seconds
+    log_start_requested      = Signal(str)          # directory path
+    log_stop_requested       = Signal()
+    curve_visibility_changed = Signal(str, bool)    # key, visible
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -42,19 +43,29 @@ class ControlPanel(QWidget):
         grp = QGroupBox('Current Values')
         grid = QGridLayout(grp)
         grid.setVerticalSpacing(2)
-        grid.setHorizontalSpacing(6)
+        grid.setHorizontalSpacing(4)
 
+        # key, display name, unit, has checkbox
         rows = [
-            ('uab',  'Uab',  'V'),
-            ('ubc',  'Ubc',  'V'),
-            ('uca',  'Uca',  'V'),
-            ('uavg', 'Uavg', 'V'),
-            ('unb',  'Unb',  '%'),
-            ('f',    'Freq', 'Hz'),
+            ('uab',  'Uab',  'V',  True),
+            ('ubc',  'Ubc',  'V',  True),
+            ('uca',  'Uca',  'V',  True),
+            ('uavg', 'Uavg', 'V',  True),
+            ('unb',  'Unb',  '%',  False),
+            ('f',    'Freq', 'Hz', False),
         ]
         self._val_labels: dict[str, QLabel] = {}
 
-        for i, (key, name, unit) in enumerate(rows):
+        for i, (key, name, unit, has_cb) in enumerate(rows):
+            col = 0
+            if has_cb:
+                cb = QCheckBox()
+                cb.setChecked(True)
+                cb.setFixedWidth(18)
+                cb.toggled.connect(lambda checked, k=key: self.curve_visibility_changed.emit(k, checked))
+                grid.addWidget(cb, i, col)
+            col += 1
+
             key_lbl = QLabel(f'{name}:')
             key_lbl.setStyleSheet(_KEY_STYLE)
 
@@ -64,9 +75,9 @@ class ControlPanel(QWidget):
             unit_lbl = QLabel(unit)
             unit_lbl.setStyleSheet(_KEY_STYLE)
 
-            grid.addWidget(key_lbl,  i, 0)
-            grid.addWidget(val_lbl,  i, 1)
-            grid.addWidget(unit_lbl, i, 2)
+            grid.addWidget(key_lbl,  i, col)
+            grid.addWidget(val_lbl,  i, col + 1)
+            grid.addWidget(unit_lbl, i, col + 2)
 
             self._val_labels[key] = val_lbl
 
