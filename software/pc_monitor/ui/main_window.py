@@ -131,6 +131,7 @@ class MainWindow(QMainWindow):
             return
         self._buffer.append(packet)
         self.sbar.update_packet(packet)
+        self.ctrl.update_values(packet)
         if self._logger.active:
             self._logger.write(packet)
 

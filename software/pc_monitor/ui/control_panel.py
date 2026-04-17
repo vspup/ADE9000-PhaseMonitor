@@ -1,8 +1,22 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton,
-    QSpinBox, QGroupBox, QFileDialog,
+    QSpinBox, QGroupBox, QFileDialog, QGridLayout,
 )
 from PySide6.QtCore import Signal
+
+from core.packet_parser import Packet
+
+_VAL_STYLE  = 'font-family: monospace; font-size: 13px; font-weight: bold; color: {color};'
+_KEY_STYLE  = 'font-family: monospace; font-size: 10px; color: #888888;'
+
+_COLORS = {
+    'uab':  '#ff6b6b',
+    'ubc':  '#51cf66',
+    'uca':  '#74c0fc',
+    'uavg': '#ffd43b',
+    'unb':  '#ff922b',
+    'f':    '#cc5de8',
+}
 
 
 class ControlPanel(QWidget):
@@ -18,9 +32,53 @@ class ControlPanel(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
+        layout.addWidget(self._build_values_group())
         layout.addWidget(self._build_display_group())
         layout.addWidget(self._build_logging_group())
         layout.addStretch()
+
+    # ------------------------------------------------------------------
+    def _build_values_group(self) -> QGroupBox:
+        grp = QGroupBox('Current Values')
+        grid = QGridLayout(grp)
+        grid.setVerticalSpacing(2)
+        grid.setHorizontalSpacing(6)
+
+        rows = [
+            ('uab',  'Uab',  'V'),
+            ('ubc',  'Ubc',  'V'),
+            ('uca',  'Uca',  'V'),
+            ('uavg', 'Uavg', 'V'),
+            ('unb',  'Unb',  '%'),
+            ('f',    'Freq', 'Hz'),
+        ]
+        self._val_labels: dict[str, QLabel] = {}
+
+        for i, (key, name, unit) in enumerate(rows):
+            key_lbl = QLabel(f'{name}:')
+            key_lbl.setStyleSheet(_KEY_STYLE)
+
+            val_lbl = QLabel('—')
+            val_lbl.setStyleSheet(_VAL_STYLE.format(color=_COLORS[key]))
+
+            unit_lbl = QLabel(unit)
+            unit_lbl.setStyleSheet(_KEY_STYLE)
+
+            grid.addWidget(key_lbl,  i, 0)
+            grid.addWidget(val_lbl,  i, 1)
+            grid.addWidget(unit_lbl, i, 2)
+
+            self._val_labels[key] = val_lbl
+
+        return grp
+
+    def update_values(self, p: Packet) -> None:
+        self._val_labels['uab'].setText(f'{p.uab:.1f}')
+        self._val_labels['ubc'].setText(f'{p.ubc:.1f}')
+        self._val_labels['uca'].setText(f'{p.uca:.1f}')
+        self._val_labels['uavg'].setText(f'{p.uavg:.1f}')
+        self._val_labels['unb'].setText(f'{p.unb:.2f}')
+        self._val_labels['f'].setText(f'{p.f:.2f}' if p.f > 0 else '—')
 
     # ------------------------------------------------------------------
     def _build_display_group(self) -> QGroupBox:

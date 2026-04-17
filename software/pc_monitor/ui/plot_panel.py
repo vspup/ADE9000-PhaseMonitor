@@ -24,38 +24,31 @@ class PlotPanel(QWidget):
         pen_uab  = pg.mkPen('#ff6b6b', width=2)
         pen_ubc  = pg.mkPen('#51cf66', width=2)
         pen_uca  = pg.mkPen('#74c0fc', width=2)
-        pen_uavg = pg.mkPen('#ffd43b', width=2)
+        pen_uavg = pg.mkPen('#ffd43b', width=2, style=Qt.PenStyle.DashLine)
         pen_unb  = pg.mkPen('#ff922b', width=2)
         pen_freq = pg.mkPen('#cc5de8', width=2)
-        pen_thr  = pg.mkPen('#ff4444', width=1,
-                             style=Qt.PenStyle.DashLine)
+        pen_thr  = pg.mkPen('#ff4444', width=1, style=Qt.PenStyle.DashLine)
 
-        # Graph 1 — Voltages
+        # Graph 1 — Voltages + Uavg
         self.p_volt = self.glw.addPlot(row=0, col=0)
         self.p_volt.setLabel('left', 'Voltage', units='V')
         self.p_volt.showGrid(x=True, y=True, alpha=0.25)
-        legend = self.p_volt.addLegend(offset=(10, 5))
-        self.c_uab = self.p_volt.plot(pen=pen_uab,  name='Uab')
-        self.c_ubc = self.p_volt.plot(pen=pen_ubc,  name='Ubc')
-        self.c_uca = self.p_volt.plot(pen=pen_uca,  name='Uca')
+        self.p_volt.addLegend(offset=(10, 5))
+        self.c_uab  = self.p_volt.plot(pen=pen_uab,  name='Uab')
+        self.c_ubc  = self.p_volt.plot(pen=pen_ubc,  name='Ubc')
+        self.c_uca  = self.p_volt.plot(pen=pen_uca,  name='Uca')
+        self.c_uavg = self.p_volt.plot(pen=pen_uavg, name='Uavg')
 
-        # Graph 2 — Uavg
-        self.p_avg = self.glw.addPlot(row=1, col=0)
-        self.p_avg.setLabel('left', 'Uavg', units='V')
-        self.p_avg.showGrid(x=True, y=True, alpha=0.25)
-        self.p_avg.setXLink(self.p_volt)
-        self.c_uavg = self.p_avg.plot(pen=pen_uavg, name='Uavg')
-
-        # Graph 3 — Unbalance
-        self.p_unb = self.glw.addPlot(row=2, col=0)
+        # Graph 2 — Unbalance
+        self.p_unb = self.glw.addPlot(row=1, col=0)
         self.p_unb.setLabel('left', 'Unbalance', units='%')
         self.p_unb.showGrid(x=True, y=True, alpha=0.25)
         self.p_unb.setXLink(self.p_volt)
         self.c_unb     = self.p_unb.plot(pen=pen_unb, name='Unb%')
         self.c_unb_thr = self.p_unb.addLine(y=10.0, pen=pen_thr)
 
-        # Graph 4 — Frequency
-        self.p_freq = self.glw.addPlot(row=3, col=0)
+        # Graph 3 — Frequency
+        self.p_freq = self.glw.addPlot(row=2, col=0)
         self.p_freq.setLabel('left', 'Frequency', units='Hz')
         self.p_freq.setLabel('bottom', 'Time', units='s')
         self.p_freq.showGrid(x=True, y=True, alpha=0.25)
@@ -84,7 +77,6 @@ class PlotPanel(QWidget):
 
         t = (ts - self._t0) / 1000.0  # ms → s
 
-        # Apply history window mask
         if len(t) > 0:
             t_min = t[-1] - self._history_s
             mask  = t >= t_min
@@ -99,8 +91,7 @@ class PlotPanel(QWidget):
         self.c_uavg.setData(t, data['uavg'])
         self.c_unb.setData(t, data['unb'])
 
-        # Frequency: skip zero values (no signal)
-        freq = data['f']
+        freq  = data['f']
         valid = freq > 0
         if np.any(valid):
             self.c_freq.setData(t[valid], freq[valid])
