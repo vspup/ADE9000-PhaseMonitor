@@ -14,21 +14,21 @@ class SerialReader(QThread):
         self._port    = ''
         self._baud    = 115200
         self._running = False
+        self._ser     = None   # set in run(); safe for main-thread writes (pyserial R/W thread-safe)
 
     def configure(self, port: str, baud: int = 115200) -> None:
         self._port = port
         self._baud = baud
 
     def run(self) -> None:
-        ser = None
         try:
-            ser = serial.Serial(self._port, self._baud, timeout=1.0)
+            self._ser = serial.Serial(self._port, self._baud, timeout=1.0)
             self._running = True
             self.connection_changed.emit(True)
 
             while self._running:
                 try:
-                    raw = ser.readline()
+                    raw = self._ser.readline()
                 except serial.SerialException as e:
                     self.error_occurred.emit(str(e))
                     break
@@ -40,10 +40,16 @@ class SerialReader(QThread):
         except serial.SerialException as e:
             self.error_occurred.emit(str(e))
         finally:
-            if ser and ser.is_open:
-                ser.close()
+            if self._ser and self._ser.is_open:
+                self._ser.close()
+            self._ser     = None
             self._running = False
             self.connection_changed.emit(False)
+
+    def send_command(self, cmd: str) -> None:
+        """Send a text command to firmware (called from main thread)."""
+        if self._ser and self._ser.is_open:
+            self._ser.write((cmd + '\n').encode())
 
     def stop(self) -> None:
         self._running = False
