@@ -8,6 +8,7 @@
 #include "protocol.h"
 #include "state_machine.h"
 #include "commands.h"
+#include "calibration.h"
 
 static uint32_t lastSendMs   = 0;
 static bool     freqDetected = false;
@@ -23,6 +24,7 @@ void appSetup()
   while (!Serial) {}
 
   ade9000DriverInit();
+  calibrationInit();     // load saved gains and apply to ADE9000
   stateMachineInit();
   commandsInit();
 
@@ -32,6 +34,9 @@ void appSetup()
 void appLoop()
 {
   commandsProcess();
+
+  // During calibration the main data loop is suspended — commands still processed above.
+  if (calibrationIsActive()) return;
 
   uint32_t now = millis();
   if (now - lastSendMs >= SEND_PERIOD_MS)

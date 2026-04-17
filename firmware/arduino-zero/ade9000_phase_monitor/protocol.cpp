@@ -49,3 +49,30 @@ void sendVoltageJson(const VoltageSnapshot &snapshot, const EventFlags &flags)
 
   Serial.println(F("]}"));
 }
+
+void sendCalibrationPhase(const char *phase)
+{
+  Serial.print(F("{\"status\":\"ok\",\"event\":\"cal_phase\",\"phase\":\""));
+  Serial.print(phase);
+  Serial.println(F("\"}"));
+}
+
+void sendCalibrationRms(const char *phase, float vrms)
+{
+  Serial.print(F("{\"status\":\"ok\",\"event\":\"cal_rms\",\"phase\":\""));
+  Serial.print(phase);
+  Serial.print(F("\",\"vrms\":"));
+  Serial.print(vrms, 3);
+  Serial.println(F("}"));
+}
+
+void sendCalibrationApplied(const char *phase, float gain, int32_t regVal)
+{
+  Serial.print(F("{\"status\":\"ok\",\"event\":\"cal_applied\",\"phase\":\""));
+  Serial.print(phase);
+  Serial.print(F("\",\"gain\":"));
+  Serial.print(gain, 6);
+  Serial.print(F(",\"reg\":"));
+  Serial.print(regVal);
+  Serial.println(F("}"));
+}
