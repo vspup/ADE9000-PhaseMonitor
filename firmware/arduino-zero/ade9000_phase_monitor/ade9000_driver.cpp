@@ -39,21 +39,29 @@ void ade9000DriverInit()
   ade9000.SetupADE9000();
 
   // Override for 3P3W delta. Start with 60Hz until frequency is measured.
-  currentAccMode = ACCMODE_DELTA_60HZ;
-  ade9000.SPI_Write_16(ADDR_ACCMODE, currentAccMode);
+  ade9000SetAccMode(ACCMODE_DELTA_60HZ);
 }
 
 // Called once from app after signal is detected and frequency is known.
 // Switches SELFREQ bit if grid is 50Hz. Safe to call multiple times.
-void ade9000ApplyFreqMode(float measuredHz)
+void ade9000SetAccMode(uint16_t accmode)
 {
-  currentAccMode = (measuredHz < 55.0f) ? ACCMODE_DELTA_50HZ : ACCMODE_DELTA_60HZ;
+  currentAccMode = accmode;
   ade9000.SPI_Write_16(ADDR_ACCMODE, currentAccMode);
 }
 
 uint16_t ade9000GetCurrentAccMode()
 {
   return currentAccMode;
+}
+
+void ade9000ApplyFreqMode(float measuredHz)
+{
+  // Update only the SELFREQ bit (bit 8); preserve the VCONSEL/ICONSEL bits
+  // so the current measurement mode (delta vs L-N) is not disturbed.
+  uint16_t base    = currentAccMode & ~static_cast<uint16_t>(0x0100);
+  uint16_t selfreq = (measuredHz < 55.0f) ? 0x0100u : 0x0000u;
+  ade9000SetAccMode(base | selfreq);
 }
 
 int32_t ade9000ReadRawRms(uint8_t phase)

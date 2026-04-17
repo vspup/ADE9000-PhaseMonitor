@@ -9,6 +9,7 @@
 #include "state_machine.h"
 #include "commands.h"
 #include "calibration.h"
+#include "mode_manager.h"
 
 static uint32_t lastSendMs   = 0;
 static bool     freqDetected = false;
@@ -24,6 +25,7 @@ void appSetup()
   while (!Serial) {}
 
   ade9000DriverInit();
+  modeManagerInit();     // default: MEASURE_DELTA
   calibrationInit();     // load saved gains and apply to ADE9000
   stateMachineInit();
   commandsInit();

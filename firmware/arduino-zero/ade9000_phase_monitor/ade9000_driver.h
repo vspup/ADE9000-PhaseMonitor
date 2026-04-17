@@ -13,7 +13,10 @@ bool     ade9000ReadVoltageRMS(float &uab, float &ubc, float &uca);
 bool     ade9000ReadFrequency(float &freqHz);
 void     ade9000ApplyFreqMode(float measuredHz);
 
-// Returns the last ACCMODE value written (used by calibration to restore on exit).
+// Write ACCMODE and track the value (single authoritative write point).
+void     ade9000SetAccMode(uint16_t accmode);
+
+// Returns the last ACCMODE value written.
 uint16_t ade9000GetCurrentAccMode();
 
 // Read raw signed 32-bit AVRMS/BVRMS/CVRMS for a single phase (0=A, 1=B, 2=C).
