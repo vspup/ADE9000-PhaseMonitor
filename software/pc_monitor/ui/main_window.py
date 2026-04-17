@@ -12,6 +12,7 @@ from core.data_buffer import DataBuffer
 from core.logger import Logger
 from core.packet_parser import parse_packet
 from core.serial_reader import SerialReader
+from ui.calibration_dialog import CalibrationDialog
 from ui.control_panel import ControlPanel
 from ui.plot_panel import PlotPanel
 from ui.status_bar import StatusBar
@@ -23,9 +24,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('ADE9000 Phase Monitor')
         self.resize(1280, 820)
 
-        self._buffer = DataBuffer(maxlen=1200)
-        self._reader = SerialReader()
-        self._logger = Logger()
+        self._buffer  = DataBuffer(maxlen=1200)
+        self._reader  = SerialReader()
+        self._logger  = Logger()
+        self._cal_dlg: CalibrationDialog | None = None
 
         self._build_ui()
         self._connect_signals()
@@ -101,6 +103,7 @@ class MainWindow(QMainWindow):
         self.ctrl.log_start_requested.connect(self._start_log)
         self.ctrl.log_stop_requested.connect(self._stop_log)
         self.ctrl.curve_visibility_changed.connect(self.plots.set_curve_visible)
+        self.ctrl.calibration_requested.connect(self._open_calibration)
 
     # ------------------------------------------------------------------
     def _refresh_ports(self) -> None:
@@ -127,6 +130,10 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     @Slot(str)
     def _on_line(self, line: str) -> None:
+        # Route calibration responses to the dialog when it is open.
+        if self._cal_dlg and self._cal_dlg.isVisible():
+            self._cal_dlg.handle_firmware_line(line)
+
         packet = parse_packet(line)
         if packet is None:
             return
@@ -147,10 +154,23 @@ class MainWindow(QMainWindow):
             self.btn_connect.setText('Disconnect')
             self.lbl_status.setText('●  Connected')
             self.lbl_status.setStyleSheet('color: #51cf66; padding: 0 8px;')
+            self.ctrl.btn_calibrate.setEnabled(True)
+            self.ctrl.btn_calibrate.setToolTip('')
         else:
             self.btn_connect.setText('Connect')
             self.lbl_status.setText('●  Disconnected')
             self.lbl_status.setStyleSheet('color: #888888; padding: 0 8px;')
+            self.ctrl.btn_calibrate.setEnabled(False)
+            self.ctrl.btn_calibrate.setToolTip('Connect to device first')
+
+    # ------------------------------------------------------------------
+    @Slot()
+    def _open_calibration(self) -> None:
+        if self._cal_dlg and self._cal_dlg.isVisible():
+            self._cal_dlg.raise_()
+            return
+        self._cal_dlg = CalibrationDialog(self._reader, parent=self)
+        self._cal_dlg.show()
 
     # ------------------------------------------------------------------
     def _refresh_plots(self) -> None:
