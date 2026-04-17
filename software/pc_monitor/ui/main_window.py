@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 
 from core.data_buffer import DataBuffer
 from core.logger import Logger
+from core.measurement_mode import MeasurementMode
 from core.packet_parser import parse_packet
 from core.serial_reader import SerialReader
 from ui.calibration_dialog import CalibrationDialog
@@ -24,10 +25,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('ADE9000 Phase Monitor')
         self.resize(1280, 820)
 
-        self._buffer  = DataBuffer(maxlen=1200)
-        self._reader  = SerialReader()
-        self._logger  = Logger()
-        self._cal_dlg: CalibrationDialog | None = None
+        self._buffer       = DataBuffer(maxlen=1200)
+        self._reader       = SerialReader()
+        self._logger       = Logger()
+        self._cal_dlg:     CalibrationDialog | None = None
+        self._current_mode: MeasurementMode | None  = None
 
         self._build_ui()
         self._connect_signals()
@@ -104,6 +106,7 @@ class MainWindow(QMainWindow):
         self.ctrl.log_stop_requested.connect(self._stop_log)
         self.ctrl.curve_visibility_changed.connect(self.plots.set_curve_visible)
         self.ctrl.calibration_requested.connect(self._open_calibration)
+        self.ctrl.mode_change_requested.connect(self._on_mode_requested)
 
     # ------------------------------------------------------------------
     def _refresh_ports(self) -> None:
@@ -130,18 +133,27 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     @Slot(str)
     def _on_line(self, line: str) -> None:
-        # Route calibration responses to the dialog when it is open.
         if self._cal_dlg and self._cal_dlg.isVisible():
             self._cal_dlg.handle_firmware_line(line)
 
         packet = parse_packet(line)
         if packet is None:
             return
+
+        if packet.mode != self._current_mode:
+            self._current_mode = packet.mode
+            self.ctrl.set_mode(packet.mode)
+            self.plots.set_mode(packet.mode)
+
         self._buffer.append(packet)
         self.sbar.update_packet(packet)
         self.ctrl.update_values(packet)
         if self._logger.active:
             self._logger.write(packet)
+
+    @Slot(str)
+    def _on_mode_requested(self, mode_str: str) -> None:
+        self._reader.send_command(f'SET MODE {mode_str}')
 
     @Slot(str)
     def _on_error(self, msg: str) -> None:
@@ -162,6 +174,7 @@ class MainWindow(QMainWindow):
             self.lbl_status.setStyleSheet('color: #888888; padding: 0 8px;')
             self.ctrl.btn_calibrate.setEnabled(False)
             self.ctrl.btn_calibrate.setToolTip('Connect to device first')
+            self._current_mode = None
 
     # ------------------------------------------------------------------
     @Slot()

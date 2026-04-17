@@ -3,6 +3,17 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
+from core.measurement_mode import MeasurementMode
+
+_DELTA = MeasurementMode.MEASURE_DELTA
+_WYE   = MeasurementMode.MEASURE_WYE
+_CAL   = MeasurementMode.CALIBRATION_LN
+
+# Curves that belong to each mode group
+_DELTA_CURVES = ('uab', 'ubc', 'uca', 'uavg')
+_WYE_CURVES   = ('va',  'vb',  'vc',  'vavg')
+_CAL_CURVES   = ('va',  'vb',  'vc')          # vavg excluded in cal mode
+
 
 class _ToggleLegend(pg.LegendItem):
     """LegendItem that toggles curve visibility on click."""
@@ -38,36 +49,56 @@ class PlotPanel(QWidget):
 
         self._history_s: float = 60.0
         self._t0: float | None = None
+        self._current_mode: MeasurementMode = _DELTA
+
+        # Per-curve checkbox visibility (from control panel)
+        self._cb_visible: dict[str, bool] = {k: True for k in _DELTA_CURVES + _WYE_CURVES}
 
         self._setup_plots()
+        self.set_mode(_DELTA)
 
     # ------------------------------------------------------------------
     def _setup_plots(self) -> None:
-        pen_uab  = pg.mkPen('#ff6b6b', width=2)
-        pen_ubc  = pg.mkPen('#51cf66', width=2)
-        pen_uca  = pg.mkPen('#74c0fc', width=2)
-        pen_uavg = pg.mkPen('#ffd43b', width=2, style=Qt.PenStyle.DashLine)
+        pen_ab   = pg.mkPen('#ff6b6b', width=2)
+        pen_bc   = pg.mkPen('#51cf66', width=2)
+        pen_ca   = pg.mkPen('#74c0fc', width=2)
+        pen_avg  = pg.mkPen('#ffd43b', width=2, style=Qt.PenStyle.DashLine)
         pen_unb  = pg.mkPen('#ff922b', width=2)
         pen_freq = pg.mkPen('#cc5de8', width=2)
-        # Graph 1 — Voltages + Uavg (~2/3 height), spans both columns
+
+        # Voltage plot (top, 2/3 height, spans both columns)
         self.p_volt = self.glw.addPlot(row=0, col=0, colspan=2)
         self.p_volt.setLabel('left', 'Voltage', units='V')
         self.p_volt.showGrid(x=True, y=True, alpha=0.25)
 
-        legend = _ToggleLegend(offset=(10, 5))
-        legend.setParentItem(self.p_volt.graphicsItem())
+        # Delta curves
+        self.c_uab  = self.p_volt.plot(pen=pen_ab)
+        self.c_ubc  = self.p_volt.plot(pen=pen_bc)
+        self.c_uca  = self.p_volt.plot(pen=pen_ca)
+        self.c_uavg = self.p_volt.plot(pen=pen_avg)
 
-        self.c_uab  = self.p_volt.plot(pen=pen_uab,  name='Uab')
-        self.c_ubc  = self.p_volt.plot(pen=pen_ubc,  name='Ubc')
-        self.c_uca  = self.p_volt.plot(pen=pen_uca,  name='Uca')
-        self.c_uavg = self.p_volt.plot(pen=pen_uavg, name='Uavg')
+        # Wye curves
+        self.c_va   = self.p_volt.plot(pen=pen_ab)
+        self.c_vb   = self.p_volt.plot(pen=pen_bc)
+        self.c_vc   = self.p_volt.plot(pen=pen_ca)
+        self.c_vavg = self.p_volt.plot(pen=pen_avg)
 
-        legend.addItem(self.c_uab,  'Uab')
-        legend.addItem(self.c_ubc,  'Ubc')
-        legend.addItem(self.c_uca,  'Uca')
-        legend.addItem(self.c_uavg, 'Uavg')
+        # Legends (one per mode group, same position — only one visible at a time)
+        self._legend_delta = _ToggleLegend(offset=(10, 5))
+        self._legend_delta.setParentItem(self.p_volt.graphicsItem())
+        self._legend_delta.addItem(self.c_uab,  'Uab')
+        self._legend_delta.addItem(self.c_ubc,  'Ubc')
+        self._legend_delta.addItem(self.c_uca,  'Uca')
+        self._legend_delta.addItem(self.c_uavg, 'Uavg')
 
-        # Graph 2 — Unbalance (bottom-left, ~1/3 height)
+        self._legend_wye = _ToggleLegend(offset=(10, 5))
+        self._legend_wye.setParentItem(self.p_volt.graphicsItem())
+        self._legend_wye.addItem(self.c_va,   'Va')
+        self._legend_wye.addItem(self.c_vb,   'Vb')
+        self._legend_wye.addItem(self.c_vc,   'Vc')
+        self._legend_wye.addItem(self.c_vavg, 'Vavg')
+
+        # Unbalance plot (bottom-left, 1/3 height)
         self.p_unb = self.glw.addPlot(row=1, col=0)
         self.p_unb.setLabel('left',   'Unbalance', units='%', color='#ff922b')
         self.p_unb.setLabel('bottom', 'Time', units='s')
@@ -75,7 +106,7 @@ class PlotPanel(QWidget):
         self.p_unb.setXLink(self.p_volt)
         self.c_unb = self.p_unb.plot(pen=pen_unb)
 
-        # Graph 3 — Frequency (bottom-right, ~1/3 height)
+        # Frequency plot (bottom-right, 1/3 height)
         self.p_freq = self.glw.addPlot(row=1, col=1)
         self.p_freq.setLabel('left',   'Frequency', units='Hz', color='#cc5de8')
         self.p_freq.setLabel('bottom', 'Time', units='s')
@@ -83,7 +114,6 @@ class PlotPanel(QWidget):
         self.p_freq.setXLink(self.p_volt)
         self.c_freq = self.p_freq.plot(pen=pen_freq)
 
-        # Row stretch: voltage plot gets 2, bottom row gets 1
         self.glw.ci.layout.setRowStretchFactor(0, 2)
         self.glw.ci.layout.setRowStretchFactor(1, 1)
 
@@ -91,16 +121,39 @@ class PlotPanel(QWidget):
     def set_history(self, seconds: float) -> None:
         self._history_s = seconds
 
+    def set_mode(self, mode: MeasurementMode) -> None:
+        self._current_mode = mode
+        self._apply_visibility()
+
+        self._legend_delta.setVisible(mode == _DELTA)
+        self._legend_wye.setVisible(mode in (_WYE, _CAL))
+
+        # Unbalance plot is hidden in cal mode (firmware doesn't send unb)
+        self.p_unb.setVisible(mode != _CAL)
+
+    def _apply_visibility(self) -> None:
+        mode = self._current_mode
+
+        def show(key: str, curve) -> None:
+            in_mode = (
+                (mode == _DELTA and key in _DELTA_CURVES) or
+                (mode == _WYE   and key in _WYE_CURVES)   or
+                (mode == _CAL   and key in _CAL_CURVES)
+            )
+            curve.setVisible(in_mode and self._cb_visible.get(key, True))
+
+        show('uab',  self.c_uab)
+        show('ubc',  self.c_ubc)
+        show('uca',  self.c_uca)
+        show('uavg', self.c_uavg)
+        show('va',   self.c_va)
+        show('vb',   self.c_vb)
+        show('vc',   self.c_vc)
+        show('vavg', self.c_vavg)
+
     def set_curve_visible(self, key: str, visible: bool) -> None:
-        mapping = {
-            'uab':  self.c_uab,
-            'ubc':  self.c_ubc,
-            'uca':  self.c_uca,
-            'uavg': self.c_uavg,
-        }
-        curve = mapping.get(key)
-        if curve is not None:
-            curve.setVisible(visible)
+        self._cb_visible[key] = visible
+        self._apply_visibility()
 
     # ------------------------------------------------------------------
     def update(self, arrays: dict) -> None:
@@ -111,7 +164,7 @@ class PlotPanel(QWidget):
         if self._t0 is None:
             self._t0 = ts[0]
 
-        t = (ts - self._t0) / 1000.0  # ms → s
+        t = (ts - self._t0) / 1000.0
 
         if len(t) > 0:
             t_min = t[-1] - self._history_s
@@ -125,6 +178,12 @@ class PlotPanel(QWidget):
         self.c_ubc.setData(t, data['ubc'])
         self.c_uca.setData(t, data['uca'])
         self.c_uavg.setData(t, data['uavg'])
+
+        self.c_va.setData(t, data['va'])
+        self.c_vb.setData(t, data['vb'])
+        self.c_vc.setData(t, data['vc'])
+        self.c_vavg.setData(t, data['vavg'])
+
         self.c_unb.setData(t, data['unb'])
 
         freq  = data['f']
@@ -134,6 +193,7 @@ class PlotPanel(QWidget):
 
     def reset(self) -> None:
         self._t0 = None
-        for c in (self.c_uab, self.c_ubc, self.c_uca,
-                  self.c_uavg, self.c_unb, self.c_freq):
+        for c in (self.c_uab, self.c_ubc, self.c_uca, self.c_uavg,
+                  self.c_va, self.c_vb, self.c_vc, self.c_vavg,
+                  self.c_unb, self.c_freq):
             c.setData([], [])
