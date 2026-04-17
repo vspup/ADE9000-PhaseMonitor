@@ -100,6 +100,7 @@ class MainWindow(QMainWindow):
         self.ctrl.history_changed.connect(self.plots.set_history)
         self.ctrl.log_start_requested.connect(self._start_log)
         self.ctrl.log_stop_requested.connect(self._stop_log)
+        self.ctrl.curve_visibility_changed.connect(self.plots.set_curve_visible)
 
     # ------------------------------------------------------------------
     def _refresh_ports(self) -> None:

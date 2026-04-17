@@ -4,6 +4,28 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 
+class _ToggleLegend(pg.LegendItem):
+    """LegendItem that toggles curve visibility on click."""
+
+    def mouseClickEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return super().mouseClickEvent(event)
+        pos = event.pos()
+        for sample, label in self.items:
+            sr = sample.mapRectToParent(sample.boundingRect())
+            lr = label.mapRectToParent(label.boundingRect())
+            if sr.contains(pos) or lr.contains(pos):
+                item = sample.item
+                visible = not item.isVisible()
+                item.setVisible(visible)
+                opacity = 1.0 if visible else 0.3
+                sample.setOpacity(opacity)
+                label.setOpacity(opacity)
+                event.accept()
+                return
+        super().mouseClickEvent(event)
+
+
 class PlotPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -27,63 +49,58 @@ class PlotPanel(QWidget):
         pen_uavg = pg.mkPen('#ffd43b', width=2, style=Qt.PenStyle.DashLine)
         pen_unb  = pg.mkPen('#ff922b', width=2)
         pen_freq = pg.mkPen('#cc5de8', width=2)
-        pen_thr  = pg.mkPen('#ff4444', width=1, style=Qt.PenStyle.DashLine)
-
-        # Graph 1 — Voltages + Uavg (~2/3 height)
-        self.p_volt = self.glw.addPlot(row=0, col=0)
+        # Graph 1 — Voltages + Uavg (~2/3 height), spans both columns
+        self.p_volt = self.glw.addPlot(row=0, col=0, colspan=2)
         self.p_volt.setLabel('left', 'Voltage', units='V')
         self.p_volt.showGrid(x=True, y=True, alpha=0.25)
-        self.p_volt.addLegend(offset=(10, 5))
+
+        legend = _ToggleLegend(offset=(10, 5))
+        legend.setParentItem(self.p_volt.graphicsItem())
+
         self.c_uab  = self.p_volt.plot(pen=pen_uab,  name='Uab')
         self.c_ubc  = self.p_volt.plot(pen=pen_ubc,  name='Ubc')
         self.c_uca  = self.p_volt.plot(pen=pen_uca,  name='Uca')
         self.c_uavg = self.p_volt.plot(pen=pen_uavg, name='Uavg')
 
-        # Graph 2 — Unbalance (left) + Frequency (right axis, ~1/3 height)
+        legend.addItem(self.c_uab,  'Uab')
+        legend.addItem(self.c_ubc,  'Ubc')
+        legend.addItem(self.c_uca,  'Uca')
+        legend.addItem(self.c_uavg, 'Uavg')
+
+        # Graph 2 — Unbalance (bottom-left, ~1/3 height)
         self.p_unb = self.glw.addPlot(row=1, col=0)
-        self.p_unb.setLabel('left',   'Unbalance', units='%',
-                            color='#ff922b')
+        self.p_unb.setLabel('left',   'Unbalance', units='%', color='#ff922b')
         self.p_unb.setLabel('bottom', 'Time', units='s')
         self.p_unb.showGrid(x=True, y=True, alpha=0.25)
         self.p_unb.setXLink(self.p_volt)
-        self.c_unb     = self.p_unb.plot(pen=pen_unb, name='Unb%')
-        self.c_unb_thr = self.p_unb.addLine(y=10.0, pen=pen_thr)
+        self.c_unb = self.p_unb.plot(pen=pen_unb)
 
-        # Secondary ViewBox for frequency on the right axis
-        self._vb_freq = pg.ViewBox()
-        self.p_unb.showAxis('right')
-        self.p_unb.scene().addItem(self._vb_freq)
-        self.p_unb.getAxis('right').linkToView(self._vb_freq)
-        self.p_unb.getAxis('right').setLabel('Frequency', units='Hz',
-                                              color='#cc5de8')
-        self._vb_freq.setXLink(self.p_unb)
+        # Graph 3 — Frequency (bottom-right, ~1/3 height)
+        self.p_freq = self.glw.addPlot(row=1, col=1)
+        self.p_freq.setLabel('left',   'Frequency', units='Hz', color='#cc5de8')
+        self.p_freq.setLabel('bottom', 'Time', units='s')
+        self.p_freq.showGrid(x=True, y=True, alpha=0.25)
+        self.p_freq.setXLink(self.p_volt)
+        self.c_freq = self.p_freq.plot(pen=pen_freq)
 
-        self.c_freq     = pg.PlotDataItem(pen=pen_freq, name='Freq')
-        self.c_freq_nom = pg.InfiniteLine(pos=50.0, angle=0, pen=pen_thr)
-        self._vb_freq.addItem(self.c_freq)
-        self._vb_freq.addItem(self.c_freq_nom)
-
-        # Keep secondary ViewBox geometry in sync with the main plot
-        self.p_unb.vb.sigResized.connect(self._sync_freq_vb)
-        self._sync_freq_vb()
-
-        # Row stretch: voltage plot gets 2, bottom plot gets 1
+        # Row stretch: voltage plot gets 2, bottom row gets 1
         self.glw.ci.layout.setRowStretchFactor(0, 2)
         self.glw.ci.layout.setRowStretchFactor(1, 1)
-
-    def _sync_freq_vb(self) -> None:
-        self._vb_freq.setGeometry(self.p_unb.vb.sceneBoundingRect())
-        self._vb_freq.linkedViewChanged(self.p_unb.vb, self._vb_freq.XAxis)
 
     # ------------------------------------------------------------------
     def set_history(self, seconds: float) -> None:
         self._history_s = seconds
 
-    def set_unb_threshold(self, value: float) -> None:
-        self.c_unb_thr.setValue(value)
-
-    def set_freq_nominal(self, value: float) -> None:
-        self.c_freq_nom.setValue(value)
+    def set_curve_visible(self, key: str, visible: bool) -> None:
+        mapping = {
+            'uab':  self.c_uab,
+            'ubc':  self.c_ubc,
+            'uca':  self.c_uca,
+            'uavg': self.c_uavg,
+        }
+        curve = mapping.get(key)
+        if curve is not None:
+            curve.setVisible(visible)
 
     # ------------------------------------------------------------------
     def update(self, arrays: dict) -> None:
