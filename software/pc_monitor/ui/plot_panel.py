@@ -29,7 +29,7 @@ class PlotPanel(QWidget):
         pen_freq = pg.mkPen('#cc5de8', width=2)
         pen_thr  = pg.mkPen('#ff4444', width=1, style=Qt.PenStyle.DashLine)
 
-        # Graph 1 — Voltages + Uavg
+        # Graph 1 — Voltages + Uavg (~2/3 height)
         self.p_volt = self.glw.addPlot(row=0, col=0)
         self.p_volt.setLabel('left', 'Voltage', units='V')
         self.p_volt.showGrid(x=True, y=True, alpha=0.25)
@@ -39,22 +39,41 @@ class PlotPanel(QWidget):
         self.c_uca  = self.p_volt.plot(pen=pen_uca,  name='Uca')
         self.c_uavg = self.p_volt.plot(pen=pen_uavg, name='Uavg')
 
-        # Graph 2 — Unbalance
+        # Graph 2 — Unbalance (left) + Frequency (right axis, ~1/3 height)
         self.p_unb = self.glw.addPlot(row=1, col=0)
-        self.p_unb.setLabel('left', 'Unbalance', units='%')
+        self.p_unb.setLabel('left',   'Unbalance', units='%',
+                            color='#ff922b')
+        self.p_unb.setLabel('bottom', 'Time', units='s')
         self.p_unb.showGrid(x=True, y=True, alpha=0.25)
         self.p_unb.setXLink(self.p_volt)
         self.c_unb     = self.p_unb.plot(pen=pen_unb, name='Unb%')
         self.c_unb_thr = self.p_unb.addLine(y=10.0, pen=pen_thr)
 
-        # Graph 3 — Frequency
-        self.p_freq = self.glw.addPlot(row=2, col=0)
-        self.p_freq.setLabel('left', 'Frequency', units='Hz')
-        self.p_freq.setLabel('bottom', 'Time', units='s')
-        self.p_freq.showGrid(x=True, y=True, alpha=0.25)
-        self.p_freq.setXLink(self.p_volt)
-        self.c_freq     = self.p_freq.plot(pen=pen_freq, name='Freq')
-        self.c_freq_nom = self.p_freq.addLine(y=50.0, pen=pen_thr)
+        # Secondary ViewBox for frequency on the right axis
+        self._vb_freq = pg.ViewBox()
+        self.p_unb.showAxis('right')
+        self.p_unb.scene().addItem(self._vb_freq)
+        self.p_unb.getAxis('right').linkToView(self._vb_freq)
+        self.p_unb.getAxis('right').setLabel('Frequency', units='Hz',
+                                              color='#cc5de8')
+        self._vb_freq.setXLink(self.p_unb)
+
+        self.c_freq     = pg.PlotDataItem(pen=pen_freq, name='Freq')
+        self.c_freq_nom = pg.InfiniteLine(pos=50.0, angle=0, pen=pen_thr)
+        self._vb_freq.addItem(self.c_freq)
+        self._vb_freq.addItem(self.c_freq_nom)
+
+        # Keep secondary ViewBox geometry in sync with the main plot
+        self.p_unb.vb.sigResized.connect(self._sync_freq_vb)
+        self._sync_freq_vb()
+
+        # Row stretch: voltage plot gets 2, bottom plot gets 1
+        self.glw.ci.layout.setRowStretchFactor(0, 2)
+        self.glw.ci.layout.setRowStretchFactor(1, 1)
+
+    def _sync_freq_vb(self) -> None:
+        self._vb_freq.setGeometry(self.p_unb.vb.sceneBoundingRect())
+        self._vb_freq.linkedViewChanged(self.p_unb.vb, self._vb_freq.XAxis)
 
     # ------------------------------------------------------------------
     def set_history(self, seconds: float) -> None:
