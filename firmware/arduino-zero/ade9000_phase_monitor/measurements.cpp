@@ -1,32 +1,54 @@
 #include "measurements.h"
 #include "ade9000_driver.h"
 #include "calculations.h"
+#include "mode_manager.h"
 #include "config.h"
 
-// Minimum L-L voltage (V) to consider signal present.
-// 50V is ~12.5% of 400V nominal — filters noise, passes any live signal.
+// Minimum voltage (V) on any channel to consider the signal present.
 static const float SIGNAL_MIN_V = 50.0f;
 
-bool readVoltageSnapshot(VoltageSnapshot &snapshot)
+bool readVoltageSnapshot(VoltageSnapshot &snap)
 {
-  snapshot.ts = millis();
+  snap.ts   = millis();
+  snap.mode = modeGet();
 
-  if (!ade9000ReadVoltageRMS(snapshot.Uab, snapshot.Ubc, snapshot.Uca))
+  float ch_a, ch_b, ch_c;
+  if (!ade9000ReadVoltageRMS(ch_a, ch_b, ch_c))
     return false;
 
-  snapshot.Uavg = calcAverage3(snapshot.Uab, snapshot.Ubc, snapshot.Uca);
-  snapshot.unb  = calcUnbalancePct(snapshot.Uab, snapshot.Ubc, snapshot.Uca, snapshot.Uavg);
-  snapshot.signal_present = isSignalPresent(snapshot.Uab, snapshot.Ubc, snapshot.Uca, SIGNAL_MIN_V);
+  switch (snap.mode)
+  {
+    case MODE_MEASURE_DELTA:
+      snap.Uab  = ch_a;
+      snap.Ubc  = ch_b;
+      snap.Uca  = ch_c;
+      snap.Uavg = calcAverage3(ch_a, ch_b, ch_c);
+      snap.unb  = calcUnbalancePct(ch_a, ch_b, ch_c, snap.Uavg);
+      snap.signal_present = isSignalPresent(ch_a, ch_b, ch_c, SIGNAL_MIN_V);
+      break;
 
-  // Read frequency only when signal is present; otherwise report 0
-  if (snapshot.signal_present)
-  {
-    if (!ade9000ReadFrequency(snapshot.freq))
-      return false;
+    case MODE_MEASURE_WYE:
+      snap.Va   = ch_a;
+      snap.Vb   = ch_b;
+      snap.Vc   = ch_c;
+      snap.Vavg = calcAverage3(ch_a, ch_b, ch_c);
+      snap.unb  = calcUnbalancePct(ch_a, ch_b, ch_c, snap.Vavg);
+      snap.signal_present = isSignalPresent(ch_a, ch_b, ch_c, SIGNAL_MIN_V);
+      break;
+
+    case MODE_CALIBRATION_LN:
+      snap.Va   = ch_a;
+      snap.Vb   = ch_b;
+      snap.Vc   = ch_c;
+      snap.signal_present = isSignalPresent(ch_a, ch_b, ch_c, SIGNAL_MIN_V);
+      break;
   }
-  else
+
+  snap.freq = 0.0f;
+  if (snap.signal_present)
   {
-    snapshot.freq = 0.0f;
+    if (!ade9000ReadFrequency(snap.freq))
+      return false;
   }
 
   return true;

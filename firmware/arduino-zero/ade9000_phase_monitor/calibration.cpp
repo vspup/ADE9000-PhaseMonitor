@@ -1,5 +1,6 @@
 #include "calibration.h"
 #include "ade9000_driver.h"
+#include "mode_manager.h"
 #include "config.h"
 #include "protocol.h"
 
@@ -24,21 +25,12 @@ FlashStorage(calFlash, CalNvmData);
 
 static bool      active      = false;
 static CalPhase  activePhase = CAL_PHASE_NONE;
-static uint16_t  savedDeltaAccMode = 0x0090;   // restored on exit
 
 static CalibrationData currentCal = { 1.0f, 1.0f, 1.0f };
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-static uint16_t lnAccMode()
-{
-    // Preserve SELFREQ bit from saved delta mode; clear VCONSEL/ICONSEL bits.
-    // bits[7:4] = 0 → VCONSEL=000 (L-N, 3-phase 4-wire), ICONSEL=0.
-    // bit 8 = SELFREQ (carry over from delta mode).
-    return savedDeltaAccMode & 0x0100;   // keep only SELFREQ
-}
 
 // CalPhase enum is 1-based (A=1,B=2,C=3); driver functions expect 0-based index.
 static inline uint8_t phaseIdx(CalPhase phase) { return (uint8_t)phase - 1; }
@@ -96,13 +88,10 @@ bool calibrationIsActive()
 
 void calibrationEnter()
 {
-    // Remember which delta mode was in use so we can restore it on exit.
-    savedDeltaAccMode = ade9000GetCurrentAccMode();
-
     active      = true;
     activePhase = CAL_PHASE_NONE;
 
-    ade9000.SPI_Write_16(ADDR_ACCMODE, lnAccMode());
+    modeSet(MODE_CALIBRATION_LN);   // switches ACCMODE to L-N, saves previous mode
     sendStatusOk("cal_started");
 }
 
@@ -111,7 +100,7 @@ void calibrationExit()
     active      = false;
     activePhase = CAL_PHASE_NONE;
 
-    ade9000.SPI_Write_16(ADDR_ACCMODE, savedDeltaAccMode);
+    modeSet(modePrevious());         // restore MEASURE_DELTA or MEASURE_WYE
     sendStatusOk("cal_exit");
 }
 

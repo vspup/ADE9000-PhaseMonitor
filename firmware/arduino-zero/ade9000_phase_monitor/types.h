@@ -6,19 +6,22 @@
 
 struct VoltageSnapshot
 {
-  uint32_t ts;
+  uint32_t        ts;
+  MeasurementMode mode;
 
-  float Uab;
-  float Ubc;
-  float Uca;
+  // Phase-to-neutral (MODE_MEASURE_WYE, MODE_CALIBRATION_LN)
+  float Va, Vb, Vc;
+  float Vavg;        // mean(Va, Vb, Vc)
 
-  float Uavg;
-  float unb;
+  // Line-to-line (MODE_MEASURE_DELTA)
+  float Uab, Ubc, Uca;
+  float Uavg;        // mean(Uab, Ubc, Uca)
+
+  float unb;         // % unbalance — phase-based in WYE, L-L in DELTA
   float freq;
 
   SystemState state;
-
-  bool signal_present;
+  bool        signal_present;
 };
 
 struct EventFlags

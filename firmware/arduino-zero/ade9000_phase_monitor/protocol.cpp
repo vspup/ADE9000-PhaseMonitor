@@ -1,4 +1,5 @@
 #include "protocol.h"
+#include "mode_manager.h"
 
 // All output is JSON Lines: one object per line, human-readable.
 
@@ -26,27 +27,47 @@ void sendStatusError(const char *reason)
   Serial.println(F("\"}"));
 }
 
-void sendVoltageJson(const VoltageSnapshot &snapshot, const EventFlags &flags)
+void sendVoltageJson(const VoltageSnapshot &snap, const EventFlags &flags)
 {
-  Serial.print(F("{\"ts\":"));    Serial.print(snapshot.ts);
-  Serial.print(F(",\"uab\":"));   Serial.print(snapshot.Uab,   2);
-  Serial.print(F(",\"ubc\":"));   Serial.print(snapshot.Ubc,   2);
-  Serial.print(F(",\"uca\":"));   Serial.print(snapshot.Uca,   2);
-  Serial.print(F(",\"uavg\":")); Serial.print(snapshot.Uavg,  2);
-  Serial.print(F(",\"unb\":"));   Serial.print(snapshot.unb,   2);
-  Serial.print(F(",\"f\":"));     Serial.print(snapshot.freq,  2);
-  Serial.print(F(",\"state\":")); Serial.print((uint8_t)snapshot.state);
+  Serial.print(F("{\"ts\":"));     Serial.print(snap.ts);
+  Serial.print(F(",\"mode\":\"")); Serial.print(modeGetName(snap.mode));
+  Serial.print(F("\""));
 
-  // Flags array — only include set flags
+  switch (snap.mode)
+  {
+    case MODE_MEASURE_DELTA:
+      Serial.print(F(",\"uab\":")); Serial.print(snap.Uab,  2);
+      Serial.print(F(",\"ubc\":")); Serial.print(snap.Ubc,  2);
+      Serial.print(F(",\"uca\":")); Serial.print(snap.Uca,  2);
+      Serial.print(F(",\"uavg\":")); Serial.print(snap.Uavg, 2);
+      Serial.print(F(",\"unb\":")); Serial.print(snap.unb,  2);
+      break;
+
+    case MODE_MEASURE_WYE:
+      Serial.print(F(",\"va\":"));   Serial.print(snap.Va,   2);
+      Serial.print(F(",\"vb\":"));   Serial.print(snap.Vb,   2);
+      Serial.print(F(",\"vc\":"));   Serial.print(snap.Vc,   2);
+      Serial.print(F(",\"vavg\":")); Serial.print(snap.Vavg, 2);
+      Serial.print(F(",\"unb\":")); Serial.print(snap.unb,  2);
+      break;
+
+    case MODE_CALIBRATION_LN:
+      Serial.print(F(",\"va\":"));   Serial.print(snap.Va, 2);
+      Serial.print(F(",\"vb\":"));   Serial.print(snap.Vb, 2);
+      Serial.print(F(",\"vc\":"));   Serial.print(snap.Vc, 2);
+      break;
+  }
+
+  Serial.print(F(",\"f\":"));     Serial.print(snap.freq,  2);
+  Serial.print(F(",\"state\":")); Serial.print((uint8_t)snap.state);
+
   Serial.print(F(",\"flags\":["));
   bool first = true;
   auto sep = [&]() { if (!first) Serial.print(','); first = false; };
-
   if (flags.dip)       { sep(); Serial.print(F("\"dip\"")); }
   if (flags.unbalance) { sep(); Serial.print(F("\"unb\"")); }
   if (flags.startup)   { sep(); Serial.print(F("\"startup\"")); }
   if (flags.freq_err)  { sep(); Serial.print(F("\"freq_err\"")); }
-
   Serial.println(F("]}"));
 }
 

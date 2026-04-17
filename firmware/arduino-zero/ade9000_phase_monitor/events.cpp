@@ -1,11 +1,8 @@
 #include "events.h"
 #include "config.h"
 
-// Allowed deviation from nominal frequency (±1 Hz covers both 50Hz and 60Hz grids).
 static const float FREQ_TOLERANCE_HZ = 1.0f;
 
-// Nominal frequency is set once after auto-detection (see app.cpp / ade9000ApplyFreqMode).
-// Default covers both grids: 0 means "not yet detected" → freq_err suppressed.
 static float nominalFreqHz = 0.0f;
 
 void eventsSetNominalFreq(float hz)
@@ -13,25 +10,36 @@ void eventsSetNominalFreq(float hz)
   nominalFreqHz = hz;
 }
 
-EventFlags detectEvents(const VoltageSnapshot &snapshot)
+EventFlags detectEvents(const VoltageSnapshot &snap)
 {
   EventFlags flags = {};
 
-  // Dip: any line-to-line voltage below threshold
-  flags.dip = (snapshot.Uab < DEFAULT_DIP_THRESHOLD_V) ||
-              (snapshot.Ubc < DEFAULT_DIP_THRESHOLD_V) ||
-              (snapshot.Uca < DEFAULT_DIP_THRESHOLD_V);
-
-  // Unbalance: exceeds configured percent threshold
-  flags.unbalance = (snapshot.unb > DEFAULT_UNBALANCE_THRESHOLD_PCT);
-
-  // Startup window: signal appeared recently (signal_present but state still IDLE)
-  flags.startup = snapshot.signal_present && (snapshot.state == STATE_IDLE);
-
-  // Frequency deviation: only checked after nominal is established
-  if (snapshot.signal_present && nominalFreqHz > 0.0f)
+  // Dip detection: use the appropriate voltage set for the current mode.
+  if (snap.mode == MODE_MEASURE_DELTA)
   {
-    float dev = snapshot.freq - nominalFreqHz;
+    flags.dip = (snap.Uab < DEFAULT_DIP_THRESHOLD_V) ||
+                (snap.Ubc < DEFAULT_DIP_THRESHOLD_V) ||
+                (snap.Uca < DEFAULT_DIP_THRESHOLD_V);
+  }
+  else if (snap.mode == MODE_MEASURE_WYE)
+  {
+    // Phase-to-neutral dip threshold is ~57.7% of L-L (400V/√3 ≈ 231V → threshold ≈ 196V).
+    // Reuse DEFAULT_DIP_THRESHOLD_V / √3 as a reasonable default.
+    const float wyeDipV = DEFAULT_DIP_THRESHOLD_V * 0.5774f;
+    flags.dip = (snap.Va < wyeDipV) ||
+                (snap.Vb < wyeDipV) ||
+                (snap.Vc < wyeDipV);
+  }
+  // CALIBRATION_LN: no dip detection.
+
+  flags.unbalance = (snap.unb > DEFAULT_UNBALANCE_THRESHOLD_PCT) &&
+                    (snap.mode != MODE_CALIBRATION_LN);
+
+  flags.startup = snap.signal_present && (snap.state == STATE_IDLE);
+
+  if (snap.signal_present && nominalFreqHz > 0.0f)
+  {
+    float dev = snap.freq - nominalFreqHz;
     if (dev < 0.0f) dev = -dev;
     flags.freq_err = (dev > FREQ_TOLERANCE_HZ);
   }

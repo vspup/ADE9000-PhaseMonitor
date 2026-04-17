@@ -1,15 +1,12 @@
 #include "commands.h"
 #include "protocol.h"
 #include "calibration.h"
+#include "mode_manager.h"
 
-// Supported commands:
+// Commands:
 //   PING
-//   CAL START
-//   CAL PHASE <A|B|C>
-//   CAL READ
-//   CAL APPLY <voltage>
-//   CAL SAVE
-//   CAL EXIT
+//   SET MODE delta|wye
+//   CAL START | CAL PHASE <A|B|C> | CAL READ | CAL APPLY <v> | CAL SAVE | CAL EXIT
 
 static char    cmdBuf[64];
 static uint8_t cmdLen = 0;
@@ -21,10 +18,8 @@ void commandsInit()
 
 static void dispatchCommand(char *buf)
 {
-  // Split into up to 3 tokens: verb [sub] [arg]
   char *tok1 = strtok(buf, " ");
   if (!tok1) return;
-
   char *tok2 = strtok(nullptr, " ");
   char *tok3 = strtok(nullptr, " ");
 
@@ -33,37 +28,41 @@ static void dispatchCommand(char *buf)
     return;
   }
 
+  if (strcmp(tok1, "SET") == 0 && tok2 && strcmp(tok2, "MODE") == 0 && tok3) {
+    if (strcmp(tok3, "delta") == 0) {
+      modeSet(MODE_MEASURE_DELTA);
+      sendStatusOk("mode_set");
+    } else if (strcmp(tok3, "wye") == 0) {
+      modeSet(MODE_MEASURE_WYE);
+      sendStatusOk("mode_set");
+    } else {
+      sendStatusError("bad_mode");
+    }
+    return;
+  }
+
   if (strcmp(tok1, "CAL") == 0 && tok2) {
     if (strcmp(tok2, "START") == 0) {
       calibrationEnter();
-      return;
-    }
-    if (strcmp(tok2, "EXIT") == 0) {
+    } else if (strcmp(tok2, "EXIT") == 0) {
       calibrationExit();
-      return;
-    }
-    if (strcmp(tok2, "READ") == 0) {
+    } else if (strcmp(tok2, "READ") == 0) {
       calibrationReadRms();
-      return;
-    }
-    if (strcmp(tok2, "SAVE") == 0) {
+    } else if (strcmp(tok2, "SAVE") == 0) {
       calibrationSave();
-      return;
-    }
-    if (strcmp(tok2, "PHASE") == 0 && tok3) {
+    } else if (strcmp(tok2, "PHASE") == 0 && tok3) {
       CalPhase ph = CAL_PHASE_NONE;
-      if (strcmp(tok3, "A") == 0) ph = CAL_PHASE_A;
+      if      (strcmp(tok3, "A") == 0) ph = CAL_PHASE_A;
       else if (strcmp(tok3, "B") == 0) ph = CAL_PHASE_B;
       else if (strcmp(tok3, "C") == 0) ph = CAL_PHASE_C;
       else { sendStatusError("bad_phase"); return; }
       calibrationSelectPhase(ph);
-      return;
+    } else if (strcmp(tok2, "APPLY") == 0 && tok3) {
+      calibrationApplyGain(atof(tok3));
+    } else {
+      sendStatusError("unknown_cal_cmd");
     }
-    if (strcmp(tok2, "APPLY") == 0 && tok3) {
-      float vReal = atof(tok3);
-      calibrationApplyGain(vReal);
-      return;
-    }
+    return;
   }
 
   sendStatusError("unknown_cmd");

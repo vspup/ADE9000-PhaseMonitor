@@ -15,4 +15,11 @@ enum SystemState : uint8_t
   STATE_CALIBRATION    = 7
 };
 
+enum MeasurementMode : uint8_t
+{
+  MODE_CALIBRATION_LN = 0,   // L-N calibration; ACCMODE VCONSEL=000
+  MODE_MEASURE_DELTA  = 1,   // 3-wire delta; ACCMODE VCONSEL=001, VB reconstructed
+  MODE_MEASURE_WYE    = 2    // 4-wire star; ACCMODE VCONSEL=000, direct Va/Vb/Vc
+};
+
 #endif

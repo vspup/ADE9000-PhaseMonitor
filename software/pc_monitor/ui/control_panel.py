@@ -1,39 +1,65 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QPushButton,
-    QSpinBox, QGroupBox, QFileDialog, QGridLayout, QCheckBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QSpinBox, QGroupBox, QFileDialog, QCheckBox, QComboBox,
 )
 from PySide6.QtCore import Signal
 
+from core.measurement_mode import MeasurementMode
 from core.packet_parser import Packet
 
-_VAL_STYLE  = 'font-family: monospace; font-size: 13px; font-weight: bold; color: {color};'
-_KEY_STYLE  = 'font-family: monospace; font-size: 10px; color: #888888;'
+_VAL_STYLE = 'font-family: monospace; font-size: 13px; font-weight: bold; color: {color};'
+_KEY_STYLE = 'font-family: monospace; font-size: 10px; color: #888888;'
 
 _COLORS = {
     'uab':  '#ff6b6b',
     'ubc':  '#51cf66',
     'uca':  '#74c0fc',
     'uavg': '#ffd43b',
+    'va':   '#ff6b6b',
+    'vb':   '#51cf66',
+    'vc':   '#74c0fc',
+    'vavg': '#ffd43b',
     'unb':  '#ff922b',
     'f':    '#cc5de8',
 }
 
+_DELTA = MeasurementMode.MEASURE_DELTA
+_WYE   = MeasurementMode.MEASURE_WYE
+_CAL   = MeasurementMode.CALIBRATION_LN
+
+_ROWS = [
+    # (key, label, unit, has_cb, visible_in)
+    ('uab',  'Uab',  'V',  True,  frozenset([_DELTA])),
+    ('ubc',  'Ubc',  'V',  True,  frozenset([_DELTA])),
+    ('uca',  'Uca',  'V',  True,  frozenset([_DELTA])),
+    ('uavg', 'Uavg', 'V',  True,  frozenset([_DELTA])),
+    ('va',   'Va',   'V',  True,  frozenset([_WYE, _CAL])),
+    ('vb',   'Vb',   'V',  True,  frozenset([_WYE, _CAL])),
+    ('vc',   'Vc',   'V',  True,  frozenset([_WYE, _CAL])),
+    ('vavg', 'Vavg', 'V',  True,  frozenset([_WYE])),
+    ('unb',  'Unb',  '%',  False, frozenset([_DELTA, _WYE])),
+    ('f',    'Freq', 'Hz', False, frozenset([_DELTA, _WYE, _CAL])),
+]
+
 
 class ControlPanel(QWidget):
-    history_changed          = Signal(float)        # seconds
-    log_start_requested      = Signal(str)          # directory path
+    history_changed          = Signal(float)
+    log_start_requested      = Signal(str)
     log_stop_requested       = Signal()
-    curve_visibility_changed = Signal(str, bool)    # key, visible
+    curve_visibility_changed = Signal(str, bool)   # key, visible
     calibration_requested    = Signal()
+    mode_change_requested    = Signal(str)          # 'delta' or 'wye'
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(185)
+        self.setFixedWidth(190)
+        self._current_mode = _DELTA
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
+        layout.addWidget(self._build_mode_group())
         layout.addWidget(self._build_values_group())
         layout.addWidget(self._build_display_group())
         layout.addWidget(self._build_logging_group())
@@ -46,36 +72,64 @@ class ControlPanel(QWidget):
 
         layout.addStretch()
 
+        self.set_mode(_DELTA)
+
+    # ------------------------------------------------------------------
+    def _build_mode_group(self) -> QGroupBox:
+        grp = QGroupBox('Mode')
+        lay = QVBoxLayout(grp)
+        lay.setContentsMargins(6, 6, 6, 4)
+        lay.setSpacing(4)
+
+        self.cmb_mode = QComboBox()
+        self.cmb_mode.addItem('Delta (L-L)', _DELTA)
+        self.cmb_mode.addItem('Wye (L-N)',   _WYE)
+        self.cmb_mode.currentIndexChanged.connect(self._on_mode_combo)
+        lay.addWidget(self.cmb_mode)
+
+        self.lbl_mode_indicator = QLabel('● DELTA')
+        self.lbl_mode_indicator.setStyleSheet('font-size: 10px; color: #74c0fc;')
+        lay.addWidget(self.lbl_mode_indicator)
+
+        return grp
+
+    def _on_mode_combo(self, index: int) -> None:
+        mode = self.cmb_mode.itemData(index)
+        if mode == _DELTA:
+            self.mode_change_requested.emit('delta')
+        elif mode == _WYE:
+            self.mode_change_requested.emit('wye')
+
     # ------------------------------------------------------------------
     def _build_values_group(self) -> QGroupBox:
         grp = QGroupBox('Current Values')
-        grid = QGridLayout(grp)
-        grid.setVerticalSpacing(2)
-        grid.setHorizontalSpacing(4)
+        lay = QVBoxLayout(grp)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(1)
 
-        # key, display name, unit, has checkbox
-        rows = [
-            ('uab',  'Uab',  'V',  True),
-            ('ubc',  'Ubc',  'V',  True),
-            ('uca',  'Uca',  'V',  True),
-            ('uavg', 'Uavg', 'V',  True),
-            ('unb',  'Unb',  '%',  False),
-            ('f',    'Freq', 'Hz', False),
-        ]
-        self._val_labels: dict[str, QLabel] = {}
+        self._val_labels:  dict[str, QLabel]  = {}
+        self._row_widgets: dict[str, QWidget] = {}
 
-        for i, (key, name, unit, has_cb) in enumerate(rows):
-            col = 0
+        for key, name, unit, has_cb, _ in _ROWS:
+            row_w = QWidget()
+            row_lay = QHBoxLayout(row_w)
+            row_lay.setContentsMargins(2, 0, 2, 0)
+            row_lay.setSpacing(3)
+
             if has_cb:
                 cb = QCheckBox()
                 cb.setChecked(True)
                 cb.setFixedWidth(18)
                 cb.toggled.connect(lambda checked, k=key: self.curve_visibility_changed.emit(k, checked))
-                grid.addWidget(cb, i, col)
-            col += 1
+                row_lay.addWidget(cb)
+            else:
+                sp = QWidget()
+                sp.setFixedWidth(18)
+                row_lay.addWidget(sp)
 
             key_lbl = QLabel(f'{name}:')
             key_lbl.setStyleSheet(_KEY_STYLE)
+            key_lbl.setFixedWidth(34)
 
             val_lbl = QLabel('—')
             val_lbl.setStyleSheet(_VAL_STYLE.format(color=_COLORS[key]))
@@ -83,20 +137,55 @@ class ControlPanel(QWidget):
             unit_lbl = QLabel(unit)
             unit_lbl.setStyleSheet(_KEY_STYLE)
 
-            grid.addWidget(key_lbl,  i, col)
-            grid.addWidget(val_lbl,  i, col + 1)
-            grid.addWidget(unit_lbl, i, col + 2)
+            row_lay.addWidget(key_lbl)
+            row_lay.addWidget(val_lbl, stretch=1)
+            row_lay.addWidget(unit_lbl)
 
-            self._val_labels[key] = val_lbl
+            self._val_labels[key]  = val_lbl
+            self._row_widgets[key] = row_w
+            lay.addWidget(row_w)
 
         return grp
 
+    # ------------------------------------------------------------------
+    def set_mode(self, mode: MeasurementMode) -> None:
+        self._current_mode = mode
+
+        for key, _, _, _, visible_in in _ROWS:
+            self._row_widgets[key].setVisible(mode in visible_in)
+
+        if mode == _DELTA:
+            self.lbl_mode_indicator.setText('● DELTA')
+            self.lbl_mode_indicator.setStyleSheet('font-size: 10px; color: #74c0fc;')
+            if self.cmb_mode.currentIndex() != 0:
+                self.cmb_mode.blockSignals(True)
+                self.cmb_mode.setCurrentIndex(0)
+                self.cmb_mode.blockSignals(False)
+        elif mode == _WYE:
+            self.lbl_mode_indicator.setText('● WYE')
+            self.lbl_mode_indicator.setStyleSheet('font-size: 10px; color: #51cf66;')
+            if self.cmb_mode.currentIndex() != 1:
+                self.cmb_mode.blockSignals(True)
+                self.cmb_mode.setCurrentIndex(1)
+                self.cmb_mode.blockSignals(False)
+        elif mode == _CAL:
+            self.lbl_mode_indicator.setText('● CAL L-N')
+            self.lbl_mode_indicator.setStyleSheet('font-size: 10px; color: #ffd43b;')
+
     def update_values(self, p: Packet) -> None:
-        self._val_labels['uab'].setText(f'{p.uab:.1f}')
-        self._val_labels['ubc'].setText(f'{p.ubc:.1f}')
-        self._val_labels['uca'].setText(f'{p.uca:.1f}')
-        self._val_labels['uavg'].setText(f'{p.uavg:.1f}')
-        self._val_labels['unb'].setText(f'{p.unb:.2f}')
+        mode = p.mode
+        if mode == _DELTA:
+            self._val_labels['uab'].setText(f'{p.uab:.1f}')
+            self._val_labels['ubc'].setText(f'{p.ubc:.1f}')
+            self._val_labels['uca'].setText(f'{p.uca:.1f}')
+            self._val_labels['uavg'].setText(f'{p.uavg:.1f}')
+        elif mode in (_WYE, _CAL):
+            self._val_labels['va'].setText(f'{p.va:.1f}')
+            self._val_labels['vb'].setText(f'{p.vb:.1f}')
+            self._val_labels['vc'].setText(f'{p.vc:.1f}')
+            if mode == _WYE:
+                self._val_labels['vavg'].setText(f'{p.vavg:.1f}')
+        self._val_labels['unb'].setText(f'{p.unb:.2f}' if mode != _CAL else '—')
         self._val_labels['f'].setText(f'{p.f:.2f}' if p.f > 0 else '—')
 
     # ------------------------------------------------------------------
