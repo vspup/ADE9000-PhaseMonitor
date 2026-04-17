@@ -178,8 +178,8 @@ void calibrationApplyGain(float vReal)
 
     float newGain = vReal / vMeasured;
 
-    // Clamp to a sane range (±50% correction).
-    if (newGain < 0.5f || newGain > 1.5f) {
+    // Reject only clearly invalid values (>4x or <0.25x correction).
+    if (newGain < 0.25f || newGain > 4.0f) {
         sendStatusError("gain_out_of_range");
         return;
     }
