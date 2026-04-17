@@ -154,6 +154,11 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_mode_requested(self, mode_str: str) -> None:
         self._reader.send_command(f'SET MODE {mode_str}')
+        mode = MeasurementMode.from_str(mode_str)
+        if mode != self._current_mode:
+            self._current_mode = mode
+            self.ctrl.set_mode(mode)
+            self.plots.set_mode(mode)
 
     @Slot(str)
     def _on_error(self, msg: str) -> None:
