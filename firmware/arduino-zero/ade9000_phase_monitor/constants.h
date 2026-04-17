@@ -11,7 +11,8 @@ enum SystemState : uint8_t
   STATE_EVENT_DETECTED = 3,
   STATE_RECORDING      = 4,
   STATE_COMPLETED      = 5,
-  STATE_FAULT          = 6
+  STATE_FAULT          = 6,
+  STATE_CALIBRATION    = 7
 };
 
 #endif

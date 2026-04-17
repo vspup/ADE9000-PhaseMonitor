@@ -25,4 +25,12 @@ static const float DEFAULT_UNBALANCE_THRESHOLD_PCT = 10.0f;
 
 static const bool ENABLE_DEBUG_OUTPUT = true;
 
+// ---------------------------------------------------------------------------
+// Calibration settings
+// ---------------------------------------------------------------------------
+
+// RMS samples averaged per reading at CAL_SAMPLE_INTERVAL_MS each (~1 s window).
+static const uint8_t  CAL_NUM_SAMPLES        = 5;
+static const uint32_t CAL_SAMPLE_INTERVAL_MS = 200;
+
 #endif

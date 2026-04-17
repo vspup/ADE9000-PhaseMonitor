@@ -18,6 +18,9 @@ ADE9000Class ade9000;
 static const uint16_t ACCMODE_DELTA_60HZ = 0x0090;
 static const uint16_t ACCMODE_DELTA_50HZ = 0x0190;
 
+// Tracks the last value written to ACCMODE so calibration can restore it on exit.
+static uint16_t currentAccMode = ACCMODE_DELTA_60HZ;
+
 void ade9000DriverInit()
 {
   // PSM0 mode: full-power operation
@@ -36,15 +39,50 @@ void ade9000DriverInit()
   ade9000.SetupADE9000();
 
   // Override for 3P3W delta. Start with 60Hz until frequency is measured.
-  ade9000.SPI_Write_16(ADDR_ACCMODE, ACCMODE_DELTA_60HZ);
+  currentAccMode = ACCMODE_DELTA_60HZ;
+  ade9000.SPI_Write_16(ADDR_ACCMODE, currentAccMode);
 }
 
 // Called once from app after signal is detected and frequency is known.
 // Switches SELFREQ bit if grid is 50Hz. Safe to call multiple times.
 void ade9000ApplyFreqMode(float measuredHz)
 {
-  uint16_t mode = (measuredHz < 55.0f) ? ACCMODE_DELTA_50HZ : ACCMODE_DELTA_60HZ;
-  ade9000.SPI_Write_16(ADDR_ACCMODE, mode);
+  currentAccMode = (measuredHz < 55.0f) ? ACCMODE_DELTA_50HZ : ACCMODE_DELTA_60HZ;
+  ade9000.SPI_Write_16(ADDR_ACCMODE, currentAccMode);
+}
+
+uint16_t ade9000GetCurrentAccMode()
+{
+  return currentAccMode;
+}
+
+int32_t ade9000ReadRawRms(uint8_t phase)
+{
+  uint16_t addr;
+  switch (phase) {
+    case 0:  addr = ADDR_AVRMS; break;
+    case 1:  addr = ADDR_BVRMS; break;
+    case 2:  addr = ADDR_CVRMS; break;
+    default: return 0;
+  }
+  return (int32_t)ade9000.SPI_Read_32(addr);
+}
+
+void ade9000WriteVGain(uint8_t phase, float gainMultiplier)
+{
+  // XVGAIN register format: two's-complement 32-bit.
+  // Applied multiplier = 1 + register / 2^27.
+  // Range: ±50% correction safely fits in 32-bit signed.
+  int32_t regVal = (int32_t)((gainMultiplier - 1.0f) * 134217728.0f);  // 2^27
+
+  uint16_t addr;
+  switch (phase) {
+    case 0:  addr = ADDR_AVGAIN; break;
+    case 1:  addr = ADDR_BVGAIN; break;
+    case 2:  addr = ADDR_CVGAIN; break;
+    default: return;
+  }
+  ade9000.SPI_Write_32(addr, (uint32_t)regVal);
 }
 
 uint16_t ade9000ReadRunRegister()
