@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git push origin dev:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git merge:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(python -m ruff:*)",
+      "Bash(ruff check:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git push origin main --force:*)"
+    ]
+  }
+}

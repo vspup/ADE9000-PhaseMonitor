@@ -61,6 +61,11 @@ scripts/output/
 .gitignore
 
 # =========================
+# Claude worktrees (internal)
+# =========================
+.claude/worktrees/
+
+# =========================
 # Large files
 # =========================
 *.zip
