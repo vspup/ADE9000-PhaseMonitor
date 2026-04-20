@@ -21,10 +21,23 @@ telemetry packets (status/command responses never contain `ts`).
 | `state` | uint8 | — | State machine state (see below) |
 | `flags` | []string | — | Active event flags (see below) |
 
+### Phase-current fields (MEASURE_DELTA and MEASURE_WYE)
+
+Emitted in both measurement modes — currents are mode-independent (always
+Ia/Ib/Ic from the three CT channels; Talema AZ-0500 on this board).
+
+| Field | Type | Unit | Description |
+|---|---|---|---|
+| `ia` | float | A | Phase A current (RMS) |
+| `ib` | float | A | Phase B current (RMS) |
+| `ic` | float | A | Phase C current (RMS) |
+| `iavg` | float | A | Average: (Ia+Ib+Ic)/3 |
+| `iunb` | float | % | Current unbalance |
+
 ### MEASURE_DELTA
 
 ```json
-{"ts":15230,"mode":"delta","uab":401.20,"ubc":398.70,"uca":403.10,"uavg":401.00,"unb":0.86,"f":50.01,"state":1,"flags":[]}
+{"ts":15230,"mode":"delta","uab":401.20,"ubc":398.70,"uca":403.10,"uavg":401.00,"unb":0.86,"ia":1.234,"ib":1.251,"ic":1.220,"iavg":1.235,"iunb":1.29,"f":50.01,"state":1,"flags":[]}
 ```
 
 | Field | Type | Unit | Description |
@@ -38,7 +51,7 @@ telemetry packets (status/command responses never contain `ts`).
 ### MEASURE_WYE
 
 ```json
-{"ts":15430,"mode":"wye","va":231.50,"vb":229.80,"vc":230.60,"vavg":230.63,"unb":0.37,"f":50.01,"state":1,"flags":[]}
+{"ts":15430,"mode":"wye","va":231.50,"vb":229.80,"vc":230.60,"vavg":230.63,"unb":0.37,"ia":1.234,"ib":1.251,"ic":1.220,"iavg":1.235,"iunb":1.29,"f":50.01,"state":1,"flags":[]}
 ```
 
 | Field | Type | Unit | Description |
@@ -73,6 +86,7 @@ No `ts` field — PC parser uses this to skip them as non-telemetry.
 {"status":"ok","event":"cal_defaulted"}  // NVM empty or magic mismatch — using {1,1,1}
 {"status":"ok","event":"freq_locked"}
 {"status":"ok","event":"mode_set"}
+{"status":"ok","event":"wmode","wmode":"monitor"}   // or "capture"
 {"status":"ok","event":"pong"}
 {"status":"ok","event":"cal_started"}
 {"status":"ok","event":"cal_phase","phase":"A"}
@@ -84,7 +98,7 @@ No `ts` field — PC parser uses this to skip them as non-telemetry.
 ```
 
 Error reasons: `unknown_cmd`, `cmd_overflow`, `not_in_cal`, `no_phase`, `no_signal`,
-`gain_out_of_range`, `bad_vreal`, `bad_phase`, `bad_mode`, `read_failed`, `save_failed`.
+`gain_out_of_range`, `bad_vreal`, `bad_phase`, `bad_mode`, `bad_wmode`, `read_failed`, `save_failed`.
 
 ---
 
@@ -97,6 +111,9 @@ ASCII text, newline-terminated (`\n`).
 | `PING` | Connectivity check → `pong` |
 | `SET MODE delta` | Switch to MEASURE_DELTA |
 | `SET MODE wye` | Switch to MEASURE_WYE |
+| `SET WMODE monitor` | Enter live monitoring work mode (→ `wmode` ack) |
+| `SET WMODE capture` | Enter capture work mode — live stream suspended (→ `wmode` ack) |
+| `GET WMODE` | Report current work mode (→ `wmode` ack) |
 | `CAL START` | Enter calibration (suspends telemetry loop) |
 | `CAL PHASE A\|B\|C` | Select phase, reset its gain to 1.0 |
 | `CAL READ` | Read averaged raw RMS for selected phase |
@@ -120,6 +137,37 @@ ASCII text, newline-terminated (`\n`).
 → CAL EXIT
 ← {"status":"ok","event":"cal_exit"}
 ```
+
+---
+
+## Work mode (orthogonal to measurement mode)
+
+Two operational modes, tracked independently of `SET MODE delta|wye`:
+
+| Mode | Telemetry stream | Purpose |
+|---|---|---|
+| `monitor` | 5 Hz packets as specified above | Live monitoring (current PC app) |
+| `capture` | Suspended — commands still processed | Reserved for startup-capture app |
+
+**Default at boot:** `monitor`. PC apps must still send an explicit
+`SET WMODE` on connect rather than relying on the default.
+
+### Connect handshake (MONITOR app)
+
+```
+→ SET WMODE monitor
+← {"status":"ok","event":"wmode","wmode":"monitor"}
+→ SET MODE delta          (or wye)
+← {"status":"ok","event":"mode_set"}
+```
+
+The GUI MUST:
+- send `SET WMODE monitor` immediately after opening the port;
+- **ignore all telemetry packets** until the `wmode` ack arrives;
+- abort the connection with a visible error if no ack within 2 s,
+  or if the ack reports a different mode.
+
+Future capture app will mirror this handshake with `SET WMODE capture`.
 
 ---
 
