@@ -84,7 +84,7 @@ No `ts` field — PC parser uses this to skip them as non-telemetry.
 ```
 
 Error reasons: `unknown_cmd`, `cmd_overflow`, `not_in_cal`, `no_phase`, `no_signal`,
-`gain_out_of_range`, `bad_vreal`, `bad_phase`, `bad_mode`, `read_failed`.
+`gain_out_of_range`, `bad_vreal`, `bad_phase`, `bad_mode`, `read_failed`, `save_failed`.
 
 ---
 

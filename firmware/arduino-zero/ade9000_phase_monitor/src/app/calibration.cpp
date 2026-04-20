@@ -191,5 +191,15 @@ void calibrationSave()
     d.magic = CAL_MAGIC;
     d.cal   = currentCal;
     calFlash.write(d);
+
+    // Verify by reading back — flash wear or write failure would leave stale data.
+    CalNvmData readback = calFlash.read();
+    if (readback.magic != CAL_MAGIC ||
+        readback.cal.vgain_a != currentCal.vgain_a ||
+        readback.cal.vgain_b != currentCal.vgain_b ||
+        readback.cal.vgain_c != currentCal.vgain_c) {
+        sendStatusError("save_failed");
+        return;
+    }
     sendStatusOk("cal_saved");
 }
