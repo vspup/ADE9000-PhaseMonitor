@@ -81,6 +81,13 @@ void sendVoltageJson(const VoltageSnapshot &snap, const EventFlags &flags)
   Serial.println(F("]}"));
 }
 
+void sendWorkModeOk(const char *wmode)
+{
+  Serial.print(F("{\"status\":\"ok\",\"event\":\"wmode\",\"wmode\":\""));
+  Serial.print(wmode);
+  Serial.println(F("\"}"));
+}
+
 void sendCalibrationPhase(const char *phase)
 {
   Serial.print(F("{\"status\":\"ok\",\"event\":\"cal_phase\",\"phase\":\""));

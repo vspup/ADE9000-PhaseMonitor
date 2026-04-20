@@ -22,4 +22,14 @@ enum MeasurementMode : uint8_t
   MODE_MEASURE_WYE    = 2    // 4-wire star; ACCMODE VCONSEL=000, direct Va/Vb/Vc
 };
 
+// Operational (work) mode — orthogonal to MeasurementMode.
+// MONITOR: existing live-stream behaviour (default).
+// CAPTURE: reserved for future startup-capture app; firmware holds normal
+//          packet stream quiet and waits for capture-specific commands.
+enum WorkMode : uint8_t
+{
+  WORK_MODE_MONITOR = 0,
+  WORK_MODE_CAPTURE = 1
+};
+
 #endif

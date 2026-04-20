@@ -1,3 +1,4 @@
+import json
 import os
 
 import serial.tools.list_ports
@@ -30,6 +31,13 @@ class MainWindow(QMainWindow):
         self._logger       = Logger()
         self._cal_dlg:     CalibrationDialog | None = None
         self._current_mode: MeasurementMode | None  = None
+
+        # Work-mode handshake: this GUI always drives the device into MONITOR
+        # explicitly on connect. A timer aborts if firmware does not confirm.
+        self._wmode_confirmed: bool = False
+        self._wmode_timeout = QTimer(self)
+        self._wmode_timeout.setSingleShot(True)
+        self._wmode_timeout.timeout.connect(self._on_wmode_timeout)
 
         self._build_ui()
         self._connect_signals()
@@ -137,8 +145,15 @@ class MainWindow(QMainWindow):
         if self._cal_dlg and self._cal_dlg.isVisible():
             self._cal_dlg.handle_firmware_line(line)
 
+        # Intercept work-mode acknowledgement (not a data packet).
+        self._check_wmode_ack(line)
+
         packet = parse_packet(line)
         if packet is None:
+            return
+
+        # Ignore data packets until firmware has confirmed MONITOR mode.
+        if not self._wmode_confirmed:
             return
 
         if packet.mode != self._current_mode:
@@ -170,20 +185,65 @@ class MainWindow(QMainWindow):
     def _on_connection(self, connected: bool) -> None:
         if connected:
             self.btn_connect.setText('Disconnect')
-            self.lbl_status.setText('●  Connected')
-            self.lbl_status.setStyleSheet('color: #51cf66; padding: 0 8px;')
-            self.ctrl.btn_calibrate.setEnabled(True)
-            self.ctrl.btn_calibrate.setToolTip('')
-            # Push the pre-selected mode to firmware so it matches the UI.
+            self.lbl_status.setText('●  Initializing MONITOR…')
+            self.lbl_status.setStyleSheet('color: #ffd43b; padding: 0 8px;')
+            self.ctrl.btn_calibrate.setEnabled(False)  # enabled after handshake
+
+            # Explicit MONITOR handshake — this app only does live monitoring,
+            # never assumes firmware default. Data packets are ignored until
+            # the device acknowledges the requested work mode.
+            self._wmode_confirmed = False
+            self._reader.send_command('SET WMODE monitor')
+            self._wmode_timeout.start(2000)
+
+            # Push the pre-selected measurement mode to firmware.
             selected = self.ctrl.cmb_mode.currentData()
             self._reader.send_command(f'SET MODE {selected.value}')
         else:
+            self._wmode_timeout.stop()
+            self._wmode_confirmed = False
             self.btn_connect.setText('Connect')
             self.lbl_status.setText('●  Disconnected')
             self.lbl_status.setStyleSheet('color: #888888; padding: 0 8px;')
             self.ctrl.btn_calibrate.setEnabled(False)
             self.ctrl.btn_calibrate.setToolTip('Connect to device first')
             self._current_mode = None
+
+    # ------------------------------------------------------------------
+    def _check_wmode_ack(self, line: str) -> None:
+        if self._wmode_confirmed:
+            return
+        try:
+            d = json.loads(line.strip())
+        except (json.JSONDecodeError, ValueError):
+            return
+        if d.get('event') != 'wmode':
+            return
+
+        self._wmode_timeout.stop()
+        wmode = d.get('wmode', '')
+        if d.get('status') == 'ok' and wmode == 'monitor':
+            self._wmode_confirmed = True
+            self.lbl_status.setText('●  Connected (MONITOR)')
+            self.lbl_status.setStyleSheet('color: #51cf66; padding: 0 8px;')
+            self.ctrl.btn_calibrate.setEnabled(True)
+            self.ctrl.btn_calibrate.setToolTip('')
+        else:
+            self._on_wmode_error(f'firmware reports wmode={wmode!r}')
+
+    @Slot()
+    def _on_wmode_timeout(self) -> None:
+        if not self._wmode_confirmed:
+            self._on_wmode_error('no response to SET WMODE monitor')
+
+    def _on_wmode_error(self, reason: str) -> None:
+        self.lbl_status.setText(f'●  Init error: {reason[:40]}')
+        self.lbl_status.setStyleSheet('color: #ff6b6b; padding: 0 8px;')
+        self._reader.stop()
+        QMessageBox.critical(
+            self, 'Initialization failed',
+            f'Could not set firmware to MONITOR mode: {reason}',
+        )
 
     # ------------------------------------------------------------------
     @Slot()
