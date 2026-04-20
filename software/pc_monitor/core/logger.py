@@ -1,18 +1,22 @@
 import csv
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import IO, Optional
 
+from core.measurement_mode import MeasurementMode
 from core.packet_parser import Packet
 
-_HEADER = ('ts', 'uab', 'ubc', 'uca', 'uavg', 'unb', 'f', 'state', 'flags')
+# Generic v1/v2/v3 columns: in delta mode = (Uab, Ubc, Uca),
+# in wye/cal_ln mode = (Va, Vb, Vc). The `mode` column disambiguates.
+_HEADER = ('ts', 'mode', 'v1', 'v2', 'v3', 'vavg', 'unb', 'f',
+           'ia', 'ib', 'ic', 'iavg', 'iunb', 'state', 'flags')
 
 
 class Logger:
     """Writes packets to a CSV file. Call start() → write() ... → stop()."""
 
     def __init__(self):
-        self._file   = None
+        self._file: Optional[IO[str]] = None
         self._writer = None
         self._active = False
         self._path   = ''
@@ -32,11 +36,18 @@ class Logger:
     def write(self, packet: Packet) -> None:
         if not self._active:
             return
+        if packet.mode == MeasurementMode.MEASURE_DELTA:
+            v1, v2, v3, vavg = packet.uab, packet.ubc, packet.uca, packet.uavg
+        else:
+            v1, v2, v3, vavg = packet.va, packet.vb, packet.vc, packet.vavg
         flags_str = '|'.join(packet.flags) if packet.flags else ''
         self._writer.writerow((
-            packet.ts, f'{packet.uab:.3f}', f'{packet.ubc:.3f}',
-            f'{packet.uca:.3f}', f'{packet.uavg:.3f}', f'{packet.unb:.3f}',
-            f'{packet.f:.3f}', packet.state, flags_str,
+            packet.ts, packet.mode.value,
+            f'{v1:.3f}', f'{v2:.3f}', f'{v3:.3f}', f'{vavg:.3f}',
+            f'{packet.unb:.3f}', f'{packet.f:.3f}',
+            f'{packet.ia:.3f}', f'{packet.ib:.3f}', f'{packet.ic:.3f}',
+            f'{packet.iavg:.3f}', f'{packet.iunb:.3f}',
+            packet.state, flags_str,
         ))
 
     def stop(self) -> None:

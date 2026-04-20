@@ -20,6 +20,11 @@ struct VoltageSnapshot
   float unb;         // % unbalance — phase-based in WYE, L-L in DELTA
   float freq;
 
+  // Phase currents (mode-independent: always Ia, Ib, Ic; via Talema AZ-0500 CTs)
+  float Ia, Ib, Ic;
+  float Iavg;
+  float Iunb;        // % current unbalance
+
   SystemState state;
   bool        signal_present;
 };

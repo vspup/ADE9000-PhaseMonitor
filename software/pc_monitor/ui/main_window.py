@@ -105,6 +105,7 @@ class MainWindow(QMainWindow):
         self.ctrl.log_start_requested.connect(self._start_log)
         self.ctrl.log_stop_requested.connect(self._stop_log)
         self.ctrl.curve_visibility_changed.connect(self.plots.set_curve_visible)
+        self.ctrl.current_plot_visibility_changed.connect(self.plots.set_current_plot_visible)
         self.ctrl.calibration_requested.connect(self._open_calibration)
         self.ctrl.mode_change_requested.connect(self._on_mode_requested)
 

@@ -5,7 +5,8 @@ import numpy as np
 
 from core.packet_parser import Packet
 
-_FIELDS = ('ts', 'uab', 'ubc', 'uca', 'uavg', 'va', 'vb', 'vc', 'vavg', 'unb', 'f', 'state')
+_FIELDS = ('ts', 'uab', 'ubc', 'uca', 'uavg', 'va', 'vb', 'vc', 'vavg',
+           'unb', 'f', 'state', 'ia', 'ib', 'ic', 'iavg', 'iunb')
 
 
 class DataBuffer:

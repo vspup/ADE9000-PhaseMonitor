@@ -21,11 +21,18 @@ _COLORS = {
     'vavg': '#ffd43b',
     'unb':  '#ff922b',
     'f':    '#cc5de8',
+    'ia':   '#ff6b6b',
+    'ib':   '#51cf66',
+    'ic':   '#74c0fc',
+    'iavg': '#ffd43b',
+    'iunb': '#ff922b',
 }
 
 _DELTA = MeasurementMode.MEASURE_DELTA
 _WYE   = MeasurementMode.MEASURE_WYE
 _CAL   = MeasurementMode.CALIBRATION_LN
+
+_ALL_MODES = frozenset([_DELTA, _WYE, _CAL])
 
 _ROWS = [
     # (key, label, unit, has_cb, visible_in)
@@ -41,6 +48,15 @@ _ROWS = [
     ('f',    'Freq', 'Hz', False, frozenset([_DELTA, _WYE, _CAL])),
 ]
 
+# Current block — mode-independent; always shown.
+_CURR_ROWS = [
+    ('ia',   'Ia',   'A'),
+    ('ib',   'Ib',   'A'),
+    ('ic',   'Ic',   'A'),
+    ('iavg', 'Iavg', 'A'),
+    ('iunb', 'Iunb', '%'),
+]
+
 
 class ControlPanel(QWidget):
     history_changed          = Signal(float)
@@ -49,6 +65,7 @@ class ControlPanel(QWidget):
     curve_visibility_changed = Signal(str, bool)   # key, visible
     calibration_requested    = Signal()
     mode_change_requested    = Signal(str)          # 'delta' or 'wye'
+    current_plot_visibility_changed = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -61,6 +78,7 @@ class ControlPanel(QWidget):
 
         layout.addWidget(self._build_mode_group())
         layout.addWidget(self._build_values_group())
+        layout.addWidget(self._build_current_group())
         layout.addWidget(self._build_display_group())
         layout.addWidget(self._build_logging_group())
 
@@ -148,6 +166,42 @@ class ControlPanel(QWidget):
         return grp
 
     # ------------------------------------------------------------------
+    def _build_current_group(self) -> QGroupBox:
+        grp = QGroupBox('Current')
+        lay = QVBoxLayout(grp)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(1)
+
+        for key, name, unit in _CURR_ROWS:
+            row_w = QWidget()
+            row_lay = QHBoxLayout(row_w)
+            row_lay.setContentsMargins(2, 0, 2, 0)
+            row_lay.setSpacing(3)
+
+            sp = QWidget()
+            sp.setFixedWidth(18)
+            row_lay.addWidget(sp)
+
+            key_lbl = QLabel(f'{name}:')
+            key_lbl.setStyleSheet(_KEY_STYLE)
+            key_lbl.setFixedWidth(34)
+
+            val_lbl = QLabel('—')
+            val_lbl.setStyleSheet(_VAL_STYLE.format(color=_COLORS[key]))
+
+            unit_lbl = QLabel(unit)
+            unit_lbl.setStyleSheet(_KEY_STYLE)
+
+            row_lay.addWidget(key_lbl)
+            row_lay.addWidget(val_lbl, stretch=1)
+            row_lay.addWidget(unit_lbl)
+
+            self._val_labels[key] = val_lbl
+            lay.addWidget(row_w)
+
+        return grp
+
+    # ------------------------------------------------------------------
     def set_mode(self, mode: MeasurementMode) -> None:
         self._current_mode = mode
 
@@ -188,6 +242,12 @@ class ControlPanel(QWidget):
         self._val_labels['unb'].setText(f'{p.unb:.2f}' if mode != _CAL else '—')
         self._val_labels['f'].setText(f'{p.f:.2f}' if p.f > 0 else '—')
 
+        self._val_labels['ia'].setText(f'{p.ia:.3f}')
+        self._val_labels['ib'].setText(f'{p.ib:.3f}')
+        self._val_labels['ic'].setText(f'{p.ic:.3f}')
+        self._val_labels['iavg'].setText(f'{p.iavg:.3f}')
+        self._val_labels['iunb'].setText(f'{p.iunb:.2f}')
+
     # ------------------------------------------------------------------
     def _build_display_group(self) -> QGroupBox:
         grp = QGroupBox('Display')
@@ -202,6 +262,11 @@ class ControlPanel(QWidget):
             lambda v: self.history_changed.emit(float(v))
         )
         lay.addWidget(self.spin_history)
+
+        self.cb_show_current = QCheckBox('Show Current Graph')
+        self.cb_show_current.setChecked(True)
+        self.cb_show_current.toggled.connect(self.current_plot_visibility_changed)
+        lay.addWidget(self.cb_show_current)
         return grp
 
     def _build_logging_group(self) -> QGroupBox:

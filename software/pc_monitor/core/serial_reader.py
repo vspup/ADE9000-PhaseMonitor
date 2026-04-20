@@ -1,3 +1,5 @@
+from typing import Optional
+
 import serial
 from PySide6.QtCore import QThread, Signal
 
@@ -14,7 +16,7 @@ class SerialReader(QThread):
         self._port    = ''
         self._baud    = 115200
         self._running = False
-        self._ser     = None   # set in run(); safe for main-thread writes (pyserial R/W thread-safe)
+        self._ser: Optional[serial.Serial] = None   # set in run(); safe for main-thread writes (pyserial R/W thread-safe)
 
     def configure(self, port: str, baud: int = 115200) -> None:
         self._port = port
@@ -48,8 +50,13 @@ class SerialReader(QThread):
 
     def send_command(self, cmd: str) -> None:
         """Send a text command to firmware (called from main thread)."""
-        if self._ser and self._ser.is_open:
+        if not (self._ser and self._ser.is_open):
+            self.error_occurred.emit(f'cannot send "{cmd}": port not open')
+            return
+        try:
             self._ser.write((cmd + '\n').encode())
+        except serial.SerialException as e:
+            self.error_occurred.emit(f'send failed: {e}')
 
     def stop(self) -> None:
         self._running = False

@@ -28,6 +28,13 @@ class Packet:
     state: int   = 0
     flags: List[str] = field(default_factory=list)
 
+    # ── Phase currents (mode-independent) ────────────────────────────
+    ia:   float = 0.0
+    ib:   float = 0.0
+    ic:   float = 0.0
+    iavg: float = 0.0
+    iunb: float = 0.0
+
 
 def parse_packet(line: str) -> Optional[Packet]:
     """Parse one JSON line from firmware. Returns None for non-data lines."""
@@ -58,6 +65,12 @@ def parse_packet(line: str) -> Optional[Packet]:
             f    = float(d.get('f',   0.0)),
             state= int(d.get('state', 0)),
             flags= list(d.get('flags', [])),
+            # Current fields — absent in firmware packets prior to v0.3
+            ia   = float(d.get('ia',   0.0)),
+            ib   = float(d.get('ib',   0.0)),
+            ic   = float(d.get('ic',   0.0)),
+            iavg = float(d.get('iavg', 0.0)),
+            iunb = float(d.get('iunb', 0.0)),
         )
     except (json.JSONDecodeError, KeyError, ValueError, TypeError):
         return None
