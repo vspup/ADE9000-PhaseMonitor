@@ -1,5 +1,5 @@
 #include "mode_manager.h"
-#include "src/sensors/ade9000/ade9000_driver.h"
+#include "../sensors/ade9000/ade9000_driver.h"
 
 // ACCMODE base values (without SELFREQ bit 8).
 // Delta: VCONSEL=001 (VB = VA−VC), ICONSEL=1 (IB = −IA−IC).

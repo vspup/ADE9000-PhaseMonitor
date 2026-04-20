@@ -1,7 +1,7 @@
 #ifndef MEASUREMENTS_H
 #define MEASUREMENTS_H
 
-#include "types.h"
+#include "../../../types.h"
 
 bool readVoltageSnapshot(VoltageSnapshot &snapshot);
 

@@ -1,5 +1,5 @@
 #include "events.h"
-#include "src/board/config.h"
+#include "../board/config.h"
 
 static const float FREQ_TOLERANCE_HZ = 1.0f;
 

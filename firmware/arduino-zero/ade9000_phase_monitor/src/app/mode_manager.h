@@ -2,7 +2,7 @@
 #define MODE_MANAGER_H
 
 #include <Arduino.h>
-#include "constants.h"
+#include "../../constants.h"
 
 // Initialise with default mode (MEASURE_DELTA). Call after ade9000DriverInit().
 void            modeManagerInit();

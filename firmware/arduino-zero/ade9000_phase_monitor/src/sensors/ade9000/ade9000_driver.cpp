@@ -1,6 +1,6 @@
 #include "ade9000_driver.h"
-#include "src/board/pins.h"
-#include "src/board/config.h"
+#include "../../board/pins.h"
+#include "../../board/config.h"
 
 // Channel mapping (EV-ADE9000SHIELDZ, 3P3W delta, Phase B as reference):
 //   ADE9000 channel A (AVRMS) → uab  (VA input = Phase A vs. Phase B ref)

@@ -1,5 +1,5 @@
 #include "commands.h"
-#include "src/protocol/protocol.h"
+#include "../protocol/protocol.h"
 #include "calibration.h"
 #include "mode_manager.h"
 

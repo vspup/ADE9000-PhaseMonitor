@@ -1,8 +1,8 @@
 #include "measurements.h"
 #include "ade9000_driver.h"
-#include "src/app/calculations.h"
-#include "src/app/mode_manager.h"
-#include "src/board/config.h"
+#include "../../app/calculations.h"
+#include "../../app/mode_manager.h"
+#include "../../board/config.h"
 
 // Minimum voltage (V) on any channel to consider the signal present.
 static const float SIGNAL_MIN_V = 50.0f;

@@ -1,5 +1,5 @@
 #include "protocol.h"
-#include "src/app/mode_manager.h"
+#include "../app/mode_manager.h"
 
 // All output is JSON Lines: one object per line, human-readable.
 
