@@ -18,6 +18,14 @@ static const uint32_t ADE9000_SPI_SPEED = 5000000;
 // At 230V rms input: raw code ≈ 42 800 000 → 42800000 * 5.376e-6 = 230.1 V ✓
 static const float ADE9000_VRMS_SCALE = 5.376e-6f;
 
+// Current scaling: raw ADE9000 IRMS code → amperes.
+// Talema AZ-0500 CT: ratio 1:2500, assumed burden 20 Ω.
+// Full-scale ADE9000 input = 0.5V peak = 0.3536 Vrms. Full-scale code = 52702092.
+// Primary current at full scale = 0.3536 / 20 * 2500 = 44.2 A.
+// Scale = 44.2 / 52702092 = 8.386e-7 A/count.
+// NOTE: placeholder — must be refined per-board via current calibration.
+static const float ADE9000_IRMS_SCALE = 8.386e-7f;
+
 // DIP threshold in volts (line-to-line, delta system).
 // 3P3W 400V nominal: dip if any L-L voltage drops below 340V.
 static const float DEFAULT_DIP_THRESHOLD_V        = 340.0f;

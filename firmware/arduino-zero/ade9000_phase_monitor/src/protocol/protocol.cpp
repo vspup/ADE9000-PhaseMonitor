@@ -41,6 +41,11 @@ void sendVoltageJson(const VoltageSnapshot &snap, const EventFlags &flags)
       Serial.print(F(",\"uca\":")); Serial.print(snap.Uca,  2);
       Serial.print(F(",\"uavg\":")); Serial.print(snap.Uavg, 2);
       Serial.print(F(",\"unb\":")); Serial.print(snap.unb,  2);
+      Serial.print(F(",\"ia\":"));   Serial.print(snap.Ia,   3);
+      Serial.print(F(",\"ib\":"));   Serial.print(snap.Ib,   3);
+      Serial.print(F(",\"ic\":"));   Serial.print(snap.Ic,   3);
+      Serial.print(F(",\"iavg\":")); Serial.print(snap.Iavg, 3);
+      Serial.print(F(",\"iunb\":")); Serial.print(snap.Iunb, 2);
       break;
 
     case MODE_MEASURE_WYE:
@@ -49,6 +54,11 @@ void sendVoltageJson(const VoltageSnapshot &snap, const EventFlags &flags)
       Serial.print(F(",\"vc\":"));   Serial.print(snap.Vc,   2);
       Serial.print(F(",\"vavg\":")); Serial.print(snap.Vavg, 2);
       Serial.print(F(",\"unb\":")); Serial.print(snap.unb,  2);
+      Serial.print(F(",\"ia\":"));   Serial.print(snap.Ia,   3);
+      Serial.print(F(",\"ib\":"));   Serial.print(snap.Ib,   3);
+      Serial.print(F(",\"ic\":"));   Serial.print(snap.Ic,   3);
+      Serial.print(F(",\"iavg\":")); Serial.print(snap.Iavg, 3);
+      Serial.print(F(",\"iunb\":")); Serial.print(snap.Iunb, 2);
       break;
 
     case MODE_CALIBRATION_LN:

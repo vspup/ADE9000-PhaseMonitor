@@ -110,6 +110,18 @@ bool ade9000ReadVoltageRMS(float &uab, float &ubc, float &uca)
   return true;
 }
 
+bool ade9000ReadCurrentRMS(float &ia, float &ib, float &ic)
+{
+  CurrentRMSRegs data;
+  ade9000.ReadCurrentRMSRegs(&data);
+
+  ia = (float)data.CurrentRMSReg_A * ADE9000_IRMS_SCALE;
+  ib = (float)data.CurrentRMSReg_B * ADE9000_IRMS_SCALE;
+  ic = (float)data.CurrentRMSReg_C * ADE9000_IRMS_SCALE;
+
+  return true;
+}
+
 bool ade9000ReadFrequency(float &freqHz)
 {
   PeriodRegs data;

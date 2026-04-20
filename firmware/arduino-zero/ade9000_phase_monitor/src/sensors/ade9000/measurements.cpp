@@ -44,6 +44,15 @@ bool readVoltageSnapshot(VoltageSnapshot &snap)
       break;
   }
 
+  // Currents are mode-independent: always Ia/Ib/Ic.
+  float ia = 0.0f, ib = 0.0f, ic = 0.0f;
+  ade9000ReadCurrentRMS(ia, ib, ic);
+  snap.Ia   = ia;
+  snap.Ib   = ib;
+  snap.Ic   = ic;
+  snap.Iavg = calcAverage3(ia, ib, ic);
+  snap.Iunb = calcUnbalancePct(ia, ib, ic, snap.Iavg);
+
   snap.freq = 0.0f;
   if (snap.signal_present)
   {

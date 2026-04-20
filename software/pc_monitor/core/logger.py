@@ -8,7 +8,8 @@ from core.packet_parser import Packet
 
 # Generic v1/v2/v3 columns: in delta mode = (Uab, Ubc, Uca),
 # in wye/cal_ln mode = (Va, Vb, Vc). The `mode` column disambiguates.
-_HEADER = ('ts', 'mode', 'v1', 'v2', 'v3', 'vavg', 'unb', 'f', 'state', 'flags')
+_HEADER = ('ts', 'mode', 'v1', 'v2', 'v3', 'vavg', 'unb', 'f',
+           'ia', 'ib', 'ic', 'iavg', 'iunb', 'state', 'flags')
 
 
 class Logger:
@@ -43,7 +44,10 @@ class Logger:
         self._writer.writerow((
             packet.ts, packet.mode.value,
             f'{v1:.3f}', f'{v2:.3f}', f'{v3:.3f}', f'{vavg:.3f}',
-            f'{packet.unb:.3f}', f'{packet.f:.3f}', packet.state, flags_str,
+            f'{packet.unb:.3f}', f'{packet.f:.3f}',
+            f'{packet.ia:.3f}', f'{packet.ib:.3f}', f'{packet.ic:.3f}',
+            f'{packet.iavg:.3f}', f'{packet.iunb:.3f}',
+            packet.state, flags_str,
         ))
 
     def stop(self) -> None:

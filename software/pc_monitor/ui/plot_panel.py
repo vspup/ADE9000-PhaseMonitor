@@ -50,6 +50,7 @@ class PlotPanel(QWidget):
         self._history_s: float = 60.0
         self._t0: float | None = None
         self._current_mode: MeasurementMode = _DELTA
+        self._current_visible: bool = True
 
         # Per-curve checkbox visibility (from control panel)
         self._cb_visible: dict[str, bool] = {k: True for k in _DELTA_CURVES + _WYE_CURVES}
@@ -65,8 +66,12 @@ class PlotPanel(QWidget):
         pen_avg  = pg.mkPen('#ffd43b', width=2, style=Qt.PenStyle.DashLine)
         pen_unb  = pg.mkPen('#ff922b', width=2)
         pen_freq = pg.mkPen('#cc5de8', width=2)
+        pen_ia   = pg.mkPen('#ff6b6b', width=2)
+        pen_ib   = pg.mkPen('#51cf66', width=2)
+        pen_ic   = pg.mkPen('#74c0fc', width=2)
+        pen_iavg = pg.mkPen('#ffd43b', width=2, style=Qt.PenStyle.DashLine)
 
-        # Voltage plot (top, 2/3 height, spans both columns)
+        # Voltage plot (row 0)
         self.p_volt = self.glw.addPlot(row=0, col=0, colspan=2)
         self.p_volt.setLabel('left', 'Voltage', units='V')
         self.p_volt.showGrid(x=True, y=True, alpha=0.25)
@@ -83,7 +88,6 @@ class PlotPanel(QWidget):
         self.c_vc   = self.p_volt.plot(pen=pen_ca)
         self.c_vavg = self.p_volt.plot(pen=pen_avg)
 
-        # Legends (one per mode group, same position — only one visible at a time)
         self._legend_delta = _ToggleLegend(offset=(10, 5))
         self._legend_delta.setParentItem(self.p_volt.graphicsItem())
         self._legend_delta.addItem(self.c_uab,  'Uab')
@@ -98,24 +102,54 @@ class PlotPanel(QWidget):
         self._legend_wye.addItem(self.c_vc,   'Vc')
         self._legend_wye.addItem(self.c_vavg, 'Vavg')
 
-        # Unbalance plot (bottom-left, 1/3 height)
-        self.p_unb = self.glw.addPlot(row=1, col=0)
+        # Current plot (row 1) — always same curves: Ia, Ib, Ic, Iavg
+        self.p_curr = self.glw.addPlot(row=1, col=0, colspan=2)
+        self.p_curr.setLabel('left', 'Current', units='A')
+        self.p_curr.showGrid(x=True, y=True, alpha=0.25)
+        self.p_curr.setXLink(self.p_volt)
+
+        self.c_ia   = self.p_curr.plot(pen=pen_ia)
+        self.c_ib   = self.p_curr.plot(pen=pen_ib)
+        self.c_ic   = self.p_curr.plot(pen=pen_ic)
+        self.c_iavg = self.p_curr.plot(pen=pen_iavg)
+
+        self._legend_curr = _ToggleLegend(offset=(10, 5))
+        self._legend_curr.setParentItem(self.p_curr.graphicsItem())
+        self._legend_curr.addItem(self.c_ia,   'Ia')
+        self._legend_curr.addItem(self.c_ib,   'Ib')
+        self._legend_curr.addItem(self.c_ic,   'Ic')
+        self._legend_curr.addItem(self.c_iavg, 'Iavg')
+
+        # Unbalance plot (row 2, left)
+        self.p_unb = self.glw.addPlot(row=2, col=0)
         self.p_unb.setLabel('left',   'Unbalance', units='%', color='#ff922b')
         self.p_unb.setLabel('bottom', 'Time', units='s')
         self.p_unb.showGrid(x=True, y=True, alpha=0.25)
         self.p_unb.setXLink(self.p_volt)
         self.c_unb = self.p_unb.plot(pen=pen_unb)
 
-        # Frequency plot (bottom-right, 1/3 height)
-        self.p_freq = self.glw.addPlot(row=1, col=1)
+        # Frequency plot (row 2, right)
+        self.p_freq = self.glw.addPlot(row=2, col=1)
         self.p_freq.setLabel('left',   'Frequency', units='Hz', color='#cc5de8')
         self.p_freq.setLabel('bottom', 'Time', units='s')
         self.p_freq.showGrid(x=True, y=True, alpha=0.25)
         self.p_freq.setXLink(self.p_volt)
         self.c_freq = self.p_freq.plot(pen=pen_freq)
 
-        self.glw.ci.layout.setRowStretchFactor(0, 2)
-        self.glw.ci.layout.setRowStretchFactor(1, 1)
+        self._apply_row_stretch()
+
+    def _apply_row_stretch(self) -> None:
+        layout = self.glw.ci.layout
+        if self._current_visible:
+            # voltage : current : bottom = 2 : 2 : 1
+            layout.setRowStretchFactor(0, 2)
+            layout.setRowStretchFactor(1, 2)
+            layout.setRowStretchFactor(2, 1)
+        else:
+            # voltage fills the current row's space; bottom stays fixed proportion.
+            layout.setRowStretchFactor(0, 4)
+            layout.setRowStretchFactor(1, 0)
+            layout.setRowStretchFactor(2, 1)
 
     # ------------------------------------------------------------------
     def set_history(self, seconds: float) -> None:
@@ -130,6 +164,12 @@ class PlotPanel(QWidget):
 
         # Unbalance plot is hidden in cal mode (firmware doesn't send unb)
         self.p_unb.setVisible(mode != _CAL)
+
+    def set_current_plot_visible(self, visible: bool) -> None:
+        """Show/hide the current graph. Voltage graph stretches to fill when hidden."""
+        self._current_visible = visible
+        self.p_curr.setVisible(visible)
+        self._apply_row_stretch()
 
     def _apply_visibility(self) -> None:
         mode = self._current_mode
@@ -184,6 +224,11 @@ class PlotPanel(QWidget):
         self.c_vc.setData(t, data['vc'])
         self.c_vavg.setData(t, data['vavg'])
 
+        self.c_ia.setData(t, data['ia'])
+        self.c_ib.setData(t, data['ib'])
+        self.c_ic.setData(t, data['ic'])
+        self.c_iavg.setData(t, data['iavg'])
+
         self.c_unb.setData(t, data['unb'])
 
         freq  = data['f']
@@ -195,5 +240,6 @@ class PlotPanel(QWidget):
         self._t0 = None
         for c in (self.c_uab, self.c_ubc, self.c_uca, self.c_uavg,
                   self.c_va, self.c_vb, self.c_vc, self.c_vavg,
+                  self.c_ia, self.c_ib, self.c_ic, self.c_iavg,
                   self.c_unb, self.c_freq):
             c.setData([], [])
