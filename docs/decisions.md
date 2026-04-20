@@ -57,7 +57,40 @@ Each non-trivial decision = one entry.
 ## 2026-04-19: UI layout — Uavg merged into voltage plot, dual Y-axis for bottom panel
 
 **Context:** 4 separate plots wasted vertical space; Uavg scale matches Uab/Ubc/Uca
-**Decision:** Uavg (yellow dashed) added to voltage graph; Unbalance% + Frequency combined with secondary ViewBox (right Y-axis); voltage plot gets 2/3 height via stretch factor
+**Decision:** Uavg (yellow dashed) added to voltage graph; Unbalance% + Frequency on separate bottom panels; voltage plot gets 2/3 height via stretch factor
 **Consequences:**
-- `plot_panel.py` uses `pg.ViewBox` for frequency right axis — geometry sync via `sigResized`
 - 3 plots total instead of 4
+- Bottom row: unbalance (left) + frequency (right), both linked to voltage X-axis
+
+---
+
+## 2026-04-20: Measurement mode architecture (CALIBRATION_LN / MEASURE_DELTA / MEASURE_WYE)
+
+**Context:** project started as delta-only; wye support and per-phase calibration were added
+**Decision:** explicit `MeasurementMode` enum shared across firmware and Python; mode carried in every JSON packet
+**Why:** each mode has different physically meaningful fields — sending wrong fields is misleading
+**Consequences:**
+- Firmware: `mode_manager.cpp` owns ACCMODE register; `measurements`, `protocol`, `events` are mode-aware
+- Python: `Packet` carries `mode`; UI (`control_panel`, `plot_panel`) switches field sets on mode change
+- `CALIBRATION_LN` is a mode — ensures ACCMODE is set correctly during calibration
+
+---
+
+## 2026-04-20: serial_reader.py placed in core/ not io/
+
+**Context:** python-profile recommends `io/` layer for external I/O, separate from `core/`
+**Decision:** keep `serial_reader.py` in `core/` alongside the rest of the data pipeline
+**Why:** the PC app is small (one component); an `io/` layer would add indirection without benefit
+**How to apply:** if the app grows a second transport (TCP, file replay), extract `io/` then
+
+---
+
+## 2026-04-20: FlashStorage for calibration gain persistence
+
+**Context:** per-phase voltage gains must survive power cycles
+**Decision:** `FlashStorage` library (SAMD21 NVM emulation) with magic word `0xADE99000`
+**Alternatives:** EEPROM emulation (not available on SAMD21 natively)
+**Consequences:**
+- Gains loaded and applied at `calibrationInit()` before first measurement
+- Magic mismatch → defaults `{1.0, 1.0, 1.0}` applied silently
+- NVM write wear: only on explicit `CAL SAVE` command, not on every measurement
