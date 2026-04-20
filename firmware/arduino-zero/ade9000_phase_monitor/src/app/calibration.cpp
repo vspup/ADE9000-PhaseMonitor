@@ -1,8 +1,8 @@
 #include "calibration.h"
-#include "ade9000_driver.h"
+#include "src/sensors/ade9000/ade9000_driver.h"
 #include "mode_manager.h"
-#include "config.h"
-#include "protocol.h"
+#include "src/board/config.h"
+#include "src/protocol/protocol.h"
 
 #include <FlashStorage.h>
 
