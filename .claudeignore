@@ -1,14 +1,10 @@
-# =========================
 # Build / temp
-# =========================
 *.log
 *.tmp
 *.cache
 *.bak
 
-# =========================
 # Python
-# =========================
 **/__pycache__/
 *.pyc
 *.pyo
@@ -17,62 +13,42 @@
 venv/
 env/
 
-# =========================
 # Arduino build
-# =========================
 *.elf
 *.hex
 *.bin
 *.map
 
-# =========================
-# OS junk
-# =========================
+# OS
 .DS_Store
 Thumbs.db
 
-# =========================
-# Data (важно — не грузим логи)
-# =========================
+# Data logs (runtime output, not source)
 data/*
 !data/.gitkeep
 
-# =========================
-# Reference (тяжёлые PDF не нужны модели)
-# =========================
+# Reference materials (large PDFs, not needed by AI)
 reference/*.pdf
 
-# =========================
-# Scripts temp
-# =========================
+# Scripts temp output
 scripts/tmp/
 scripts/output/
 
-# =========================
 # IDE
-# =========================
 .vscode/
 .idea/
 
-# =========================
-# Git
-# =========================
+# Git internals
 .git/
 .gitignore
 
-# =========================
 # Claude worktrees (internal)
-# =========================
 .claude/worktrees/
 
-# =========================
-# Large files
-# =========================
+# Large archives
 *.zip
 *.tar
 *.gz
 
-# =========================
-# Optional: firmware binaries if появятся
-# =========================
+# Firmware build artifacts
 firmware/**/build/
