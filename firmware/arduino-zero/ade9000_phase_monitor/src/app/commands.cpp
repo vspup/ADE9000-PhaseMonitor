@@ -2,10 +2,13 @@
 #include "../protocol/protocol.h"
 #include "calibration.h"
 #include "mode_manager.h"
+#include "work_mode.h"
 
 // Commands:
 //   PING
-//   SET MODE delta|wye
+//   SET MODE delta|wye            — measurement mode (ACCMODE)
+//   SET WMODE monitor|capture     — operational (work) mode
+//   GET WMODE
 //   CAL START | CAL PHASE <A|B|C> | CAL READ | CAL APPLY <v> | CAL SAVE | CAL EXIT
 
 static char    cmdBuf[64];
@@ -40,6 +43,24 @@ static void dispatchCommand(char *buf)
     } else {
       sendStatusError("bad_mode");
     }
+    return;
+  }
+
+  if (strcmp(tok1, "SET") == 0 && tok2 && strcmp(tok2, "WMODE") == 0 && tok3) {
+    if (strcmp(tok3, "monitor") == 0) {
+      workModeSet(WORK_MODE_MONITOR);
+      sendWorkModeOk("monitor");
+    } else if (strcmp(tok3, "capture") == 0) {
+      workModeSet(WORK_MODE_CAPTURE);
+      sendWorkModeOk("capture");
+    } else {
+      sendStatusError("bad_wmode");
+    }
+    return;
+  }
+
+  if (strcmp(tok1, "GET") == 0 && tok2 && strcmp(tok2, "WMODE") == 0) {
+    sendWorkModeOk(workModeGetName(workModeGet()));
     return;
   }
 

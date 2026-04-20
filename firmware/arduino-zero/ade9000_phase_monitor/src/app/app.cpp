@@ -10,6 +10,7 @@
 #include "commands.h"
 #include "calibration.h"
 #include "mode_manager.h"
+#include "work_mode.h"
 
 static uint32_t lastSendMs   = 0;
 static bool     freqDetected = false;
@@ -26,6 +27,7 @@ void appSetup()
 
   ade9000DriverInit();
   modeManagerInit();     // default: MEASURE_DELTA
+  workModeInit();        // default: WORK_MODE_MONITOR
   calibrationInit();     // load saved gains and apply to ADE9000
   stateMachineInit();
   commandsInit();
@@ -39,6 +41,12 @@ void appLoop()
 
   // During calibration the main data loop is suspended — commands still processed above.
   if (calibrationIsActive()) return;
+
+  // In CAPTURE work mode the live monitoring stream is suspended. Commands
+  // are still processed above; a future capture-specific pipeline will be
+  // wired in here.
+  // TODO(capture): implement startup-capture data flow (ring buffer, triggers).
+  if (workModeGet() != WORK_MODE_MONITOR) return;
 
   uint32_t now = millis();
   if (now - lastSendMs >= SEND_PERIOD_MS)
