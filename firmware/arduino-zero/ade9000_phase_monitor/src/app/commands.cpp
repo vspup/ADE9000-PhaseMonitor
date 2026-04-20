@@ -9,11 +9,13 @@
 //   CAL START | CAL PHASE <A|B|C> | CAL READ | CAL APPLY <v> | CAL SAVE | CAL EXIT
 
 static char    cmdBuf[64];
-static uint8_t cmdLen = 0;
+static uint8_t cmdLen    = 0;
+static bool    overflow  = false;
 
 void commandsInit()
 {
-  cmdLen = 0;
+  cmdLen   = 0;
+  overflow = false;
 }
 
 static void dispatchCommand(char *buf)
@@ -75,16 +77,22 @@ void commandsProcess()
     char c = (char)Serial.read();
     if (c == '\n' || c == '\r')
     {
-      if (cmdLen > 0)
-      {
+      if (overflow) {
+        sendStatusError("cmd_overflow");
+      } else if (cmdLen > 0) {
         cmdBuf[cmdLen] = '\0';
         dispatchCommand(cmdBuf);
-        cmdLen = 0;
       }
+      cmdLen   = 0;
+      overflow = false;
     }
     else if (cmdLen < (sizeof(cmdBuf) - 1))
     {
       cmdBuf[cmdLen++] = c;
+    }
+    else
+    {
+      overflow = true;
     }
   }
 }

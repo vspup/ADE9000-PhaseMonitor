@@ -23,8 +23,6 @@ static const float ADE9000_VRMS_SCALE = 5.376e-6f;
 static const float DEFAULT_DIP_THRESHOLD_V        = 340.0f;
 static const float DEFAULT_UNBALANCE_THRESHOLD_PCT = 10.0f;
 
-static const bool ENABLE_DEBUG_OUTPUT = true;
-
 // ---------------------------------------------------------------------------
 // Calibration settings
 // ---------------------------------------------------------------------------
