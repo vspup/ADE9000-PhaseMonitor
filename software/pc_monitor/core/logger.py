@@ -1,7 +1,7 @@
 import csv
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import IO, Optional
 
 from core.packet_parser import Packet
 
@@ -12,7 +12,7 @@ class Logger:
     """Writes packets to a CSV file. Call start() → write() ... → stop()."""
 
     def __init__(self):
-        self._file   = None
+        self._file: Optional[IO[str]] = None
         self._writer = None
         self._active = False
         self._path   = ''

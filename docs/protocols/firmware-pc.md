@@ -69,6 +69,8 @@ No `ts` field — PC parser uses this to skip them as non-telemetry.
 
 ```json
 {"status":"ok","event":"boot","fw":"ADE9000 Phase Monitor","ver":"1.0"}
+{"status":"ok","event":"cal_loaded"}     // gains restored from NVM
+{"status":"ok","event":"cal_defaulted"}  // NVM empty or magic mismatch — using {1,1,1}
 {"status":"ok","event":"freq_locked"}
 {"status":"ok","event":"mode_set"}
 {"status":"ok","event":"pong"}

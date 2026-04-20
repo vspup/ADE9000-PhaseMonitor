@@ -73,8 +73,10 @@ void calibrationInit()
     CalNvmData stored = calFlash.read();
     if (stored.magic == CAL_MAGIC) {
         currentCal = stored.cal;
+        sendStatusOk("cal_loaded");
     } else {
         currentCal = { 1.0f, 1.0f, 1.0f };
+        sendStatusOk("cal_defaulted");
     }
     // Apply saved (or default) gains to ADE9000.
     // The driver must already be initialised before this is called.
