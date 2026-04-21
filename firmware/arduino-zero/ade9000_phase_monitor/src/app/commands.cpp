@@ -4,11 +4,16 @@
 #include "mode_manager.h"
 #include "work_mode.h"
 
+static bool isStreaming(WorkMode wm, bool cal) {
+  return wm == WORK_MODE_MONITOR && !cal;
+}
+
 // Commands:
 //   PING
 //   SET MODE delta|wye            — measurement mode (ACCMODE)
 //   SET WMODE monitor|capture     — operational (work) mode
 //   GET WMODE
+//   GET STATUS                    — consolidated snapshot (wmode, mmode, cal, streaming)
 //   CAL START | CAL PHASE <A|B|C> | CAL READ | CAL APPLY <v> | CAL SAVE | CAL EXIT
 
 static char    cmdBuf[64];
@@ -61,6 +66,16 @@ static void dispatchCommand(char *buf)
 
   if (strcmp(tok1, "GET") == 0 && tok2 && strcmp(tok2, "WMODE") == 0) {
     sendWorkModeOk(workModeGetName(workModeGet()));
+    return;
+  }
+
+  if (strcmp(tok1, "GET") == 0 && tok2 && strcmp(tok2, "STATUS") == 0) {
+    bool cal = calibrationIsActive();
+    WorkMode wm = workModeGet();
+    sendStatusSnapshot(workModeGetName(wm),
+                       modeGetName(modeGet()),
+                       cal,
+                       isStreaming(wm, cal));
     return;
   }
 

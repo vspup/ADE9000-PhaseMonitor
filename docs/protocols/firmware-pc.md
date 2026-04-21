@@ -87,6 +87,7 @@ No `ts` field — PC parser uses this to skip them as non-telemetry.
 {"status":"ok","event":"freq_locked"}
 {"status":"ok","event":"mode_set"}
 {"status":"ok","event":"wmode","wmode":"monitor"}   // or "capture"
+{"status":"ok","event":"status","wmode":"monitor","mmode":"delta","cal":false,"streaming":true}
 {"status":"ok","event":"pong"}
 {"status":"ok","event":"cal_started"}
 {"status":"ok","event":"cal_phase","phase":"A"}
@@ -114,6 +115,7 @@ ASCII text, newline-terminated (`\n`).
 | `SET WMODE monitor` | Enter live monitoring work mode (→ `wmode` ack) |
 | `SET WMODE capture` | Enter capture work mode — live stream suspended (→ `wmode` ack) |
 | `GET WMODE` | Report current work mode (→ `wmode` ack) |
+| `GET STATUS` | Consolidated snapshot: wmode, mmode, cal, streaming (→ `status` event) |
 | `CAL START` | Enter calibration (suspends telemetry loop) |
 | `CAL PHASE A\|B\|C` | Select phase, reset its gain to 1.0 |
 | `CAL READ` | Read averaged raw RMS for selected phase |
