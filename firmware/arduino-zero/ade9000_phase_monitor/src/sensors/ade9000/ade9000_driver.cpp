@@ -122,6 +122,20 @@ bool ade9000ReadCurrentRMS(float &ia, float &ib, float &ic)
   return true;
 }
 
+bool ade9000ReadFastRms(float &ua, float &ub, float &uc,
+                        float &ia, float &ib, float &ic)
+{
+  // Half-cycle RMS registers update every ~10 ms at 50 Hz.
+  // No enable bit required — runs continuously on ADE9000.
+  ua = (float)(int32_t)ade9000.SPI_Read_32(ADDR_AVRMSONE) * ADE9000_VRMS_SCALE;
+  ub = (float)(int32_t)ade9000.SPI_Read_32(ADDR_BVRMSONE) * ADE9000_VRMS_SCALE;
+  uc = (float)(int32_t)ade9000.SPI_Read_32(ADDR_CVRMSONE) * ADE9000_VRMS_SCALE;
+  ia = (float)(int32_t)ade9000.SPI_Read_32(ADDR_AIRMSONE) * ADE9000_IRMS_SCALE;
+  ib = (float)(int32_t)ade9000.SPI_Read_32(ADDR_BIRMSONE) * ADE9000_IRMS_SCALE;
+  ic = (float)(int32_t)ade9000.SPI_Read_32(ADDR_CIRMSONE) * ADE9000_IRMS_SCALE;
+  return true;
+}
+
 bool ade9000ReadFrequency(float &freqHz)
 {
   PeriodRegs data;

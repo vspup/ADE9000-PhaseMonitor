@@ -20,4 +20,11 @@ void sendCalibrationPhase(const char *phase);
 void sendCalibrationRms(const char *phase, float vrms);
 void sendCalibrationApplied(const char *phase, float gain, int32_t regVal);
 
+// Capture pipeline events.
+void sendCaptureStatus(const char *state, uint16_t filled, uint16_t total);
+void sendCaptureSample(int16_t i,
+                       float uab, float ubc, float uca,
+                       float ia,  float ib,  float ic);
+void sendCaptureDone(uint16_t n);
+
 #endif

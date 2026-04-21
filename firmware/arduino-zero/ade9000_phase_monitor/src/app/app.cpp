@@ -11,6 +11,7 @@
 #include "calibration.h"
 #include "mode_manager.h"
 #include "work_mode.h"
+#include "capture.h"
 
 static uint32_t lastSendMs   = 0;
 static bool     freqDetected = false;
@@ -31,6 +32,7 @@ void appSetup()
   calibrationInit();     // load saved gains and apply to ADE9000
   stateMachineInit();
   commandsInit();
+  captureInit();
 
   sendStatusOk("boot", FW_NAME, FW_VERSION);
 }
@@ -42,11 +44,12 @@ void appLoop()
   // During calibration the main data loop is suspended — commands still processed above.
   if (calibrationIsActive()) return;
 
-  // In CAPTURE work mode the live monitoring stream is suspended. Commands
-  // are still processed above; a future capture-specific pipeline will be
-  // wired in here.
-  // TODO(capture): implement startup-capture data flow (ring buffer, triggers).
-  if (workModeGet() != WORK_MODE_MONITOR) return;
+  // In CAPTURE work mode the live monitoring stream is suspended; capture
+  // pipeline samples fast-RMS into a ring buffer instead.
+  if (workModeGet() == WORK_MODE_CAPTURE) {
+    captureTick(millis());
+    return;
+  }
 
   uint32_t now = millis();
   if (now - lastSendMs >= SEND_PERIOD_MS)

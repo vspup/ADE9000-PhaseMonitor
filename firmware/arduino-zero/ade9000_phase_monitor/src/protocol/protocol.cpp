@@ -128,3 +128,36 @@ void sendCalibrationApplied(const char *phase, float gain, int32_t regVal)
   Serial.print(regVal);
   Serial.println(F("}"));
 }
+
+void sendCaptureStatus(const char *state, uint16_t filled, uint16_t total)
+{
+  Serial.print(F("{\"status\":\"ok\",\"event\":\"cap_status\",\"state\":\""));
+  Serial.print(state);
+  Serial.print(F("\",\"filled\":"));
+  Serial.print(filled);
+  Serial.print(F(",\"total\":"));
+  Serial.print(total);
+  Serial.println(F("}"));
+}
+
+void sendCaptureSample(int16_t i,
+                       float uab, float ubc, float uca,
+                       float ia,  float ib,  float ic)
+{
+  Serial.print(F("{\"event\":\"cap_sample\",\"i\":"));
+  Serial.print(i);
+  Serial.print(F(",\"uab\":")); Serial.print(uab, 2);
+  Serial.print(F(",\"ubc\":")); Serial.print(ubc, 2);
+  Serial.print(F(",\"uca\":")); Serial.print(uca, 2);
+  Serial.print(F(",\"ia\":"));  Serial.print(ia, 3);
+  Serial.print(F(",\"ib\":"));  Serial.print(ib, 3);
+  Serial.print(F(",\"ic\":"));  Serial.print(ic, 3);
+  Serial.println(F("}"));
+}
+
+void sendCaptureDone(uint16_t n)
+{
+  Serial.print(F("{\"status\":\"ok\",\"event\":\"cap_done\",\"n\":"));
+  Serial.print(n);
+  Serial.println(F("}"));
+}
