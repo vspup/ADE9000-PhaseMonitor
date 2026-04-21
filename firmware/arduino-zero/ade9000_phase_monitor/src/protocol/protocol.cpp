@@ -133,12 +133,17 @@ void sendCalibrationApplied(const char *phase, float gain, int32_t regVal)
   Serial.println(F("}"));
 }
 
-void sendCaptureStatus(const char *state, uint16_t filled, uint16_t total)
+void sendCaptureStatus(const char *state, uint16_t filled,
+                       uint16_t pre, uint16_t post, uint16_t total)
 {
   Serial.print(F("{\"status\":\"ok\",\"event\":\"cap_status\",\"state\":\""));
   Serial.print(state);
   Serial.print(F("\",\"filled\":"));
   Serial.print(filled);
+  Serial.print(F(",\"pre\":"));
+  Serial.print(pre);
+  Serial.print(F(",\"post\":"));
+  Serial.print(post);
   Serial.print(F(",\"total\":"));
   Serial.print(total);
   Serial.println(F("}"));

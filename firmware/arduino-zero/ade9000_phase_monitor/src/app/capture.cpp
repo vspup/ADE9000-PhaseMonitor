@@ -2,10 +2,13 @@
 #include "../sensors/ade9000/ade9000_driver.h"
 #include "../protocol/protocol.h"
 
-static const uint16_t CAP_TOTAL       = 300;
-static const uint16_t CAP_PRE         = 100;   // samples before trigger
-static const uint16_t CAP_POST        = 200;   // samples including trigger
-static const uint32_t CAP_PERIOD_MS   = 10;
+static const uint16_t CAP_TOTAL        = 500;
+static const uint16_t CAP_PRE_DEFAULT  = 100;
+static const uint16_t CAP_POST_DEFAULT = 200;
+static const uint32_t CAP_PERIOD_MS    = 10;
+
+static uint16_t capPre  = CAP_PRE_DEFAULT;
+static uint16_t capPost = CAP_POST_DEFAULT;
 
 struct FastSample
 {
@@ -21,7 +24,7 @@ static bool               manualRequest  = false;
 
 static uint16_t writeIdx   = 0;
 static uint16_t triggerIdx = 0;
-static uint16_t armedCount = 0;   // samples captured since ARM (caps at CAP_PRE)
+static uint16_t armedCount = 0;   // samples captured since ARM (caps at capPre)
 static uint16_t postCount  = 0;   // samples captured since trigger (incl. trigger)
 static uint32_t lastTickMs = 0;
 
@@ -65,6 +68,20 @@ bool captureAbort()
   manualRequest = false;
   return true;
 }
+
+bool captureConfigure(uint16_t pre, uint16_t post)
+{
+  if (state != CAP_IDLE)              return false;
+  if (pre == 0 || post == 0)          return false;
+  if ((uint32_t)pre + post > CAP_TOTAL) return false;
+  capPre  = pre;
+  capPost = post;
+  return true;
+}
+
+uint16_t captureGetPre()   { return capPre; }
+uint16_t captureGetPost()  { return capPost; }
+uint16_t captureGetTotal() { return CAP_TOTAL; }
 
 CaptureState captureGetState() { return state; }
 
@@ -115,10 +132,10 @@ void captureTick(uint32_t now_ms)
 
   if (state == CAP_ARMED)
   {
-    if (armedCount < CAP_PRE) armedCount++;
+    if (armedCount < capPre) armedCount++;
 
     // Only arm trigger once we have a full pre-roll of samples.
-    if (armedCount >= CAP_PRE && triggerFires(s))
+    if (armedCount >= capPre && triggerFires(s))
     {
       triggerIdx = writeIdx;
       state      = CAP_TRIGGERED;
@@ -128,7 +145,7 @@ void captureTick(uint32_t now_ms)
   else // CAP_TRIGGERED
   {
     postCount++;
-    if (postCount >= CAP_POST) state = CAP_READY;
+    if (postCount >= capPost) state = CAP_READY;
   }
 
   writeIdx = (writeIdx + 1) % CAP_TOTAL;
@@ -137,10 +154,10 @@ void captureTick(uint32_t now_ms)
 void captureSendStatus()
 {
   uint16_t filled = (state == CAP_ARMED)     ? armedCount
-                  : (state == CAP_TRIGGERED) ? (uint16_t)(CAP_PRE + postCount)
-                  : (state == CAP_READY)     ? (uint16_t)(CAP_PRE + CAP_POST)
+                  : (state == CAP_TRIGGERED) ? (uint16_t)(capPre + postCount)
+                  : (state == CAP_READY)     ? (uint16_t)(capPre + capPost)
                                              : (uint16_t)0;
-  sendCaptureStatus(captureStateName(state), filled, CAP_TOTAL);
+  sendCaptureStatus(captureStateName(state), filled, capPre, capPost, CAP_TOTAL);
 }
 
 bool captureStreamRead()
@@ -150,10 +167,10 @@ bool captureStreamRead()
     return false;
   }
 
-  // Samples to emit: i = -CAP_PRE .. -1 (pre), 0 (trigger), 1 .. CAP_POST-1 (post).
+  // Samples to emit: i = -capPre .. -1 (pre), 0 (trigger), 1 .. capPost-1 (post).
   // Position in ring: (triggerIdx + i + CAP_TOTAL) % CAP_TOTAL.
-  const int16_t iStart = -(int16_t)CAP_PRE;
-  const int16_t iEnd   =  (int16_t)CAP_POST;   // exclusive
+  const int16_t iStart = -(int16_t)capPre;
+  const int16_t iEnd   =  (int16_t)capPost;   // exclusive
 
   for (int16_t i = iStart; i < iEnd; i++)
   {
@@ -164,7 +181,7 @@ bool captureStreamRead()
                       s.Ia,  s.Ib,  s.Ic);
   }
 
-  sendCaptureDone((uint16_t)(CAP_PRE + CAP_POST));
+  sendCaptureDone((uint16_t)(capPre + capPost));
   state         = CAP_IDLE;
   trigType      = CAP_TRIG_NONE;
   manualRequest = false;

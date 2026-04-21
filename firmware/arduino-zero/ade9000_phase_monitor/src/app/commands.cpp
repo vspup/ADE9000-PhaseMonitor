@@ -16,7 +16,8 @@ static bool isStreaming(WorkMode wm, bool cal) {
 //   GET WMODE
 //   GET STATUS                    — consolidated snapshot (wmode, mmode, cal, streaming)
 //   CAL START | CAL PHASE <A|B|C> | CAL READ | CAL APPLY <v> | CAL SAVE | CAL EXIT
-//   CAP ARM manual | CAP ARM dip <V> | CAP TRIGGER | CAP STATUS | CAP READ | CAP ABORT
+//   CAP SET <pre> <post> | CAP ARM manual | CAP ARM dip <V>
+//   CAP TRIGGER | CAP STATUS | CAP READ | CAP ABORT
 
 static char    cmdBuf[64];
 static uint8_t cmdLen    = 0;
@@ -140,6 +141,18 @@ static void dispatchCommand(char *buf)
     } else if (strcmp(tok2, "ABORT") == 0) {
       captureAbort();
       sendStatusOk("cap_aborted");
+    } else if (strcmp(tok2, "SET") == 0 && tok3) {
+      char *tok4 = strtok(nullptr, " ");
+      if (!tok4) { sendStatusError("bad_split"); return; }
+      long pre  = atol(tok3);
+      long post = atol(tok4);
+      if (pre <= 0 || post <= 0 || pre > 0xFFFF || post > 0xFFFF) {
+        sendStatusError("bad_split"); return;
+      }
+      if (!captureConfigure((uint16_t)pre, (uint16_t)post)) {
+        sendStatusError("bad_split"); return;
+      }
+      captureSendStatus();
     } else {
       sendStatusError("unknown_cap_cmd");
     }

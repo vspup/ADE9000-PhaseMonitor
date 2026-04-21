@@ -5,8 +5,9 @@
 
 // Fast-RMS capture pipeline. Active only in WORK_MODE_CAPTURE.
 // Samples three voltages + three currents every ~10 ms from ADE9000
-// half-cycle RMS registers into a 300-slot ring buffer
-// (100 pre-trigger + 200 including trigger + post).
+// half-cycle RMS registers into a 500-slot ring buffer. The split
+// between pre-trigger and post-trigger samples is runtime-configurable
+// via captureConfigure() (default 100 / 200).
 //
 // FSM: IDLE → ARMED → TRIGGERED → READY → IDLE
 // Triggers: manual (CAP TRIGGER) or voltage dip (min(V) < threshold).
@@ -28,6 +29,13 @@ enum CaptureTriggerType : uint8_t
 
 void         captureInit();
 void         captureTick(uint32_t now_ms);
+
+// Sets pre/post split. Only valid in IDLE. Returns false if either value
+// is zero or pre+post exceeds CAP_TOTAL.
+bool         captureConfigure(uint16_t pre, uint16_t post);
+uint16_t     captureGetPre();
+uint16_t     captureGetPost();
+uint16_t     captureGetTotal();
 
 // Returns false if state doesn't permit the transition.
 bool         captureArm(CaptureTriggerType t, float dipThresholdV);
