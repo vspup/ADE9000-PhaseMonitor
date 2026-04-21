@@ -29,11 +29,11 @@ class TestCaptureStatus(unittest.TestCase):
 
 class TestCaptureSample(unittest.TestCase):
     def test_pre_trigger_sample(self):
-        line = ('{"event":"cap_sample","i":-150,"uab":401.20,"ubc":398.70,'
+        line = ('{"event":"cap_sample","i":-100,"uab":401.20,"ubc":398.70,'
                 '"uca":403.10,"ia":1.234,"ib":1.251,"ic":1.220}')
         e = parse_capture_event(line)
         self.assertIsInstance(e, CaptureSample)
-        self.assertEqual(e.i, -150)
+        self.assertEqual(e.i, -100)
         self.assertAlmostEqual(e.uab, 401.20)
         self.assertAlmostEqual(e.ic, 1.220)
 
@@ -43,9 +43,9 @@ class TestCaptureSample(unittest.TestCase):
         self.assertEqual(e.i, 0)
 
     def test_post_trigger_sample(self):
-        line = '{"event":"cap_sample","i":149,"uab":400.0,"ubc":400.0,"uca":400.0,"ia":0,"ib":0,"ic":0}'
+        line = '{"event":"cap_sample","i":199,"uab":400.0,"ubc":400.0,"uca":400.0,"ia":0,"ib":0,"ic":0}'
         e = parse_capture_event(line)
-        self.assertEqual(e.i, 149)
+        self.assertEqual(e.i, 199)
 
     def test_missing_index_is_invalid(self):
         line = '{"event":"cap_sample","uab":400.0}'
@@ -101,7 +101,7 @@ class TestPacketParserRegression(unittest.TestCase):
     """Ensure capture events don't leak into the telemetry parser."""
 
     def test_cap_sample_not_a_packet(self):
-        line = ('{"event":"cap_sample","i":-150,"uab":401.2,"ubc":398.7,'
+        line = ('{"event":"cap_sample","i":-100,"uab":401.2,"ubc":398.7,'
                 '"uca":403.1,"ia":1.2,"ib":1.2,"ic":1.2}')
         self.assertIsNone(parse_packet(line))
 

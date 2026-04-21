@@ -6,7 +6,7 @@
 // Fast-RMS capture pipeline. Active only in WORK_MODE_CAPTURE.
 // Samples three voltages + three currents every ~10 ms from ADE9000
 // half-cycle RMS registers into a 300-slot ring buffer
-// (150 pre-trigger + 150 including trigger + post).
+// (100 pre-trigger + 200 including trigger + post).
 //
 // FSM: IDLE → ARMED → TRIGGERED → READY → IDLE
 // Triggers: manual (CAP TRIGGER) or voltage dip (min(V) < threshold).
