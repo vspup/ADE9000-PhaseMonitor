@@ -3,8 +3,8 @@
 #include "../protocol/protocol.h"
 
 static const uint16_t CAP_TOTAL       = 300;
-static const uint16_t CAP_PRE         = 150;   // samples before trigger
-static const uint16_t CAP_POST        = 150;   // samples including trigger
+static const uint16_t CAP_PRE         = 100;   // samples before trigger
+static const uint16_t CAP_POST        = 200;   // samples including trigger
 static const uint32_t CAP_PERIOD_MS   = 10;
 
 struct FastSample

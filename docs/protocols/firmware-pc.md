@@ -191,9 +191,9 @@ All `CAP …` commands return `{"status":"error","reason":"not_in_capture_mode"}
 when issued in MONITOR mode.
 
 **Sampling:** 10 ms period via ADE9000 half-cycle RMS registers (`xVRMSONE`,
-`xIRMSONE`). **Buffer:** 300 samples total = 150 pre-trigger + 150
-post-trigger (including the trigger sample at `i=0`). That is 1.5 s before
-and 1.5 s after the event at 10 ms resolution.
+`xIRMSONE`). **Buffer:** 300 samples total = 100 pre-trigger + 200
+post-trigger (including the trigger sample at `i=0`). That is 1.0 s before
+and 2.0 s after the event at 10 ms resolution.
 
 ### FSM
 
@@ -205,7 +205,7 @@ and 1.5 s after the event at 10 ms resolution.
 | `READY` | Capture complete, awaiting `CAP READ` or `CAP ABORT` |
 
 Transitions: `IDLE → ARMED` (via `CAP ARM …`) → `TRIGGERED` (trigger fires
-and ≥150 pre-roll samples accumulated) → `READY` (after 150 post-trigger
+and ≥100 pre-roll samples accumulated) → `READY` (after 150 post-trigger
 samples) → `IDLE` (after `CAP READ` or `CAP ABORT`).
 
 ### Triggers
@@ -220,12 +220,12 @@ samples) → `IDLE` (after `CAP READ` or `CAP ABORT`).
 {"status":"ok","event":"cap_status","state":"ARMED","filled":47,"total":300}
 {"status":"ok","event":"cap_triggered"}
 {"status":"ok","event":"cap_aborted"}
-{"event":"cap_sample","i":-150,"uab":401.2,"ubc":398.7,"uca":403.1,"ia":1.234,"ib":1.251,"ic":1.220}
+{"event":"cap_sample","i":-100,"uab":401.2,"ubc":398.7,"uca":403.1,"ia":1.234,"ib":1.251,"ic":1.220}
 {"status":"ok","event":"cap_done","n":300}
 ```
 
 `cap_sample` has no `status` field and no `ts` — it's a streaming data row,
-keyed by `event` and `i` (sample index: `-150..149`, `0` = trigger moment).
+keyed by `event` and `i` (sample index: `-100..199`, `0` = trigger moment).
 
 Error reasons specific to capture: `not_in_capture_mode`, `cap_busy`,
 `not_armed`, `not_ready`, `bad_trigger`, `missing_threshold`,
@@ -242,7 +242,7 @@ Error reasons specific to capture: `not_in_capture_mode`, `cap_busy`,
 → CAP STATUS
 ← {"status":"ok","event":"cap_status","state":"READY","filled":300,"total":300}
 → CAP READ
-← {"event":"cap_sample","i":-150,…}
+← {"event":"cap_sample","i":-100,…}
   …300 rows…
 ← {"status":"ok","event":"cap_done","n":300}
 ```

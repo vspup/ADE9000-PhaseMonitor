@@ -22,7 +22,7 @@ class CaptureStatus:
 
 @dataclass
 class CaptureSample:
-    i:   int      # sample index: -150..-1 pre, 0 trigger, 1..149 post
+    i:   int      # sample index: -100..-1 pre, 0 trigger, 1..199 post
     uab: float
     ubc: float
     uca: float
