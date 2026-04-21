@@ -11,6 +11,13 @@ void     ade9000DriverInit();
 uint16_t ade9000ReadRunRegister();
 bool     ade9000ReadVoltageRMS(float &uab, float &ubc, float &uca);
 bool     ade9000ReadCurrentRMS(float &ia, float &ib, float &ic);
+
+// Fast half-cycle RMS (xVRMSONE / xIRMSONE). Updates ~every 10 ms @ 50 Hz.
+// Voltage meaning is channel-wise and depends on ACCMODE VCONSEL:
+//   delta  (VCONSEL=001): ua=Uab, ub=Ubc, uc=Uca
+//   wye    (VCONSEL=000): ua=Va,  ub=Vb,  uc=Vc
+bool     ade9000ReadFastRms(float &ua, float &ub, float &uc,
+                            float &ia, float &ib, float &ic);
 bool     ade9000ReadFrequency(float &freqHz);
 void     ade9000ApplyFreqMode(float measuredHz);
 

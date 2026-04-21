@@ -3,6 +3,7 @@
 #include "calibration.h"
 #include "mode_manager.h"
 #include "work_mode.h"
+#include "capture.h"
 
 static bool isStreaming(WorkMode wm, bool cal) {
   return wm == WORK_MODE_MONITOR && !cal;
@@ -15,6 +16,7 @@ static bool isStreaming(WorkMode wm, bool cal) {
 //   GET WMODE
 //   GET STATUS                    — consolidated snapshot (wmode, mmode, cal, streaming)
 //   CAL START | CAL PHASE <A|B|C> | CAL READ | CAL APPLY <v> | CAL SAVE | CAL EXIT
+//   CAP ARM manual | CAP ARM dip <V> | CAP TRIGGER | CAP STATUS | CAP READ | CAP ABORT
 
 static char    cmdBuf[64];
 static uint8_t cmdLen    = 0;
@@ -99,6 +101,44 @@ static void dispatchCommand(char *buf)
       calibrationApplyGain(atof(tok3));
     } else {
       sendStatusError("unknown_cal_cmd");
+    }
+    return;
+  }
+
+  if (strcmp(tok1, "CAP") == 0 && tok2) {
+    if (workModeGet() != WORK_MODE_CAPTURE) {
+      sendStatusError("not_in_capture_mode");
+      return;
+    }
+
+    if (strcmp(tok2, "ARM") == 0 && tok3) {
+      CaptureTriggerType tt  = CAP_TRIG_NONE;
+      float              thr = 0.0f;
+      if (strcmp(tok3, "manual") == 0) {
+        tt = CAP_TRIG_MANUAL;
+      } else if (strcmp(tok3, "dip") == 0) {
+        char *tok4 = strtok(nullptr, " ");
+        if (!tok4) { sendStatusError("missing_threshold"); return; }
+        tt  = CAP_TRIG_DIP;
+        thr = atof(tok4);
+      } else {
+        sendStatusError("bad_trigger");
+        return;
+      }
+      if (!captureArm(tt, thr)) { sendStatusError("cap_busy"); return; }
+      captureSendStatus();
+    } else if (strcmp(tok2, "TRIGGER") == 0) {
+      if (!captureManualTrigger()) { sendStatusError("not_armed"); return; }
+      sendStatusOk("cap_triggered");
+    } else if (strcmp(tok2, "STATUS") == 0) {
+      captureSendStatus();
+    } else if (strcmp(tok2, "READ") == 0) {
+      captureStreamRead();
+    } else if (strcmp(tok2, "ABORT") == 0) {
+      captureAbort();
+      sendStatusOk("cap_aborted");
+    } else {
+      sendStatusError("unknown_cap_cmd");
     }
     return;
   }

@@ -99,7 +99,8 @@ No `ts` field — PC parser uses this to skip them as non-telemetry.
 ```
 
 Error reasons: `unknown_cmd`, `cmd_overflow`, `not_in_cal`, `no_phase`, `no_signal`,
-`gain_out_of_range`, `bad_vreal`, `bad_phase`, `bad_mode`, `bad_wmode`, `read_failed`, `save_failed`.
+`gain_out_of_range`, `bad_vreal`, `bad_phase`, `bad_mode`, `bad_wmode`, `read_failed`, `save_failed`,
+`not_in_capture_mode`, `cap_busy`, `not_armed`, `not_ready`, `bad_trigger`, `missing_threshold`, `unknown_cap_cmd`.
 
 ---
 
@@ -116,6 +117,12 @@ ASCII text, newline-terminated (`\n`).
 | `SET WMODE capture` | Enter capture work mode — live stream suspended (→ `wmode` ack) |
 | `GET WMODE` | Report current work mode (→ `wmode` ack) |
 | `GET STATUS` | Consolidated snapshot: wmode, mmode, cal, streaming (→ `status` event) |
+| `CAP ARM manual` | Arm capture buffer, wait for manual trigger (CAPTURE mode only) |
+| `CAP ARM dip <V>` | Arm capture, auto-trigger when min(V_L-L) < threshold volts |
+| `CAP TRIGGER` | Manual trigger (only valid after `CAP ARM manual`) |
+| `CAP STATUS` | Capture FSM snapshot (→ `cap_status`) |
+| `CAP READ` | Stream captured samples: `cap_sample` × N + `cap_done` |
+| `CAP ABORT` | Abort capture, return FSM to IDLE |
 | `CAL START` | Enter calibration (suspends telemetry loop) |
 | `CAL PHASE A\|B\|C` | Select phase, reset its gain to 1.0 |
 | `CAL READ` | Read averaged raw RMS for selected phase |
@@ -170,6 +177,71 @@ The GUI MUST:
   or if the ack reports a different mode.
 
 Future capture app will mirror this handshake with `SET WMODE capture`.
+
+---
+
+## Capture pipeline (WORK_MODE_CAPTURE only)
+
+Fast-RMS ring buffer for post-mortem waveform inspection around events.
+All `CAP …` commands return `{"status":"error","reason":"not_in_capture_mode"}`
+when issued in MONITOR mode.
+
+**Sampling:** 10 ms period via ADE9000 half-cycle RMS registers (`xVRMSONE`,
+`xIRMSONE`). **Buffer:** 300 samples total = 150 pre-trigger + 150
+post-trigger (including the trigger sample at `i=0`). That is 1.5 s before
+and 1.5 s after the event at 10 ms resolution.
+
+### FSM
+
+| State | Meaning |
+|---|---|
+| `IDLE` | No capture in progress |
+| `ARMED` | Ring buffer filling, waiting for trigger condition |
+| `TRIGGERED` | Trigger fired, still collecting post-trigger samples |
+| `READY` | Capture complete, awaiting `CAP READ` or `CAP ABORT` |
+
+Transitions: `IDLE → ARMED` (via `CAP ARM …`) → `TRIGGERED` (trigger fires
+and ≥150 pre-roll samples accumulated) → `READY` (after 150 post-trigger
+samples) → `IDLE` (after `CAP READ` or `CAP ABORT`).
+
+### Triggers
+
+- `manual` — fires on `CAP TRIGGER` command.
+- `dip <V>` — fires when `min(uab, ubc, uca) < V` (or the wye equivalent,
+  depending on current measurement mode). Threshold in volts.
+
+### Responses
+
+```json
+{"status":"ok","event":"cap_status","state":"ARMED","filled":47,"total":300}
+{"status":"ok","event":"cap_triggered"}
+{"status":"ok","event":"cap_aborted"}
+{"event":"cap_sample","i":-150,"uab":401.2,"ubc":398.7,"uca":403.1,"ia":1.234,"ib":1.251,"ic":1.220}
+{"status":"ok","event":"cap_done","n":300}
+```
+
+`cap_sample` has no `status` field and no `ts` — it's a streaming data row,
+keyed by `event` and `i` (sample index: `-150..149`, `0` = trigger moment).
+
+Error reasons specific to capture: `not_in_capture_mode`, `cap_busy`,
+`not_armed`, `not_ready`, `bad_trigger`, `missing_threshold`,
+`unknown_cap_cmd`.
+
+### Example flow
+
+```
+→ SET WMODE capture
+← {"status":"ok","event":"wmode","wmode":"capture"}
+→ CAP ARM dip 340
+← {"status":"ok","event":"cap_status","state":"ARMED","filled":0,"total":300}
+   (wait for dip, or poll CAP STATUS)
+→ CAP STATUS
+← {"status":"ok","event":"cap_status","state":"READY","filled":300,"total":300}
+→ CAP READ
+← {"event":"cap_sample","i":-150,…}
+  …300 rows…
+← {"status":"ok","event":"cap_done","n":300}
+```
 
 ---
 
