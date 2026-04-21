@@ -96,6 +96,7 @@ No `ts` field — PC parser uses this to skip them as non-telemetry.
 {"status":"ok","event":"cal_saved"}
 {"status":"ok","event":"cal_exit"}
 {"status":"error","reason":"<reason>"}
+{"status":"error","reason":"bad_wmode","got":"Capture"}   // offending token echoed
 ```
 
 Error reasons: `unknown_cmd`, `cmd_overflow`, `not_in_cal`, `no_phase`, `no_signal`,
@@ -155,11 +156,14 @@ Two operational modes, tracked independently of `SET MODE delta|wye`:
 
 | Mode | Telemetry stream | Purpose |
 |---|---|---|
-| `monitor` | 5 Hz packets as specified above | Live monitoring (current PC app) |
-| `capture` | Suspended — commands still processed | Reserved for startup-capture app |
+| `idle` | None | Boot default — firmware only answers commands |
+| `monitor` | 5 Hz packets as specified above | Live monitoring (MONITOR GUI) |
+| `capture` | Suspended — capture pipeline active | Startup-capture app |
 
-**Default at boot:** `monitor`. PC apps must still send an explicit
-`SET WMODE` on connect rather than relying on the default.
+**Default at boot:** `idle`. Nothing streams until the client explicitly
+sends `SET WMODE monitor` or `SET WMODE capture`. This keeps Serial Monitor
+quiet during manual debugging; PC apps unchanged since they always send
+an explicit `SET WMODE` on connect.
 
 ### Connect handshake (MONITOR app)
 
