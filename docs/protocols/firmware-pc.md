@@ -112,6 +112,8 @@ ASCII text, newline-terminated (`\n`).
 | Command | Description |
 |---|---|
 | `PING` | Connectivity check → `pong` |
+| `SYNC <seq>` | Clock-sync probe, echoes seq + device `tick_ms` (any work mode) |
+| `GET TIME` | Report device `tick_ms` (= `millis()`, any work mode) |
 | `SET MODE delta` | Switch to MEASURE_DELTA |
 | `SET MODE wye` | Switch to MEASURE_WYE |
 | `SET WMODE monitor` | Enter live monitoring work mode (→ `wmode` ack) |
@@ -218,15 +220,28 @@ samples) → `IDLE` (after `CAP READ` or `CAP ABORT`).
 ### Responses
 
 ```json
-{"status":"ok","event":"cap_status","state":"ARMED","filled":47,"pre":100,"post":200,"total":500}
+{"status":"ok","event":"cap_status","state":"ARMED","filled":47,"pre":100,"post":200,"total":500,"tick_ms":12345}
 {"status":"ok","event":"cap_triggered"}
 {"status":"ok","event":"cap_aborted"}
 {"event":"cap_sample","i":-100,"uab":401.2,"ubc":398.7,"uca":403.1,"ia":1.234,"ib":1.251,"ic":1.220}
-{"status":"ok","event":"cap_done","n":300}
+{"status":"ok","event":"cap_done","n":300,"trigger_tick_ms":42000,"sample_period_ms":10,"pre":100,"post":200,"trigger_index":0}
 ```
 
 `cap_sample` has no `status` field and no `ts` — it's a streaming data row,
-keyed by `event` and `i` (sample index: `-100..199`, `0` = trigger moment).
+keyed by `event` and `i` (sample index: `-100..199`).
+
+**Sample-index semantics:** `i=0` is the sample at which the trigger fired
+(captured at `trigger_tick_ms` on the device clock). Negative `i` are
+pre-trigger samples; positive `i` are post-trigger samples. The absolute
+device time of any sample is:
+
+```
+absolute_tick_ms(i) = trigger_tick_ms + (i − trigger_index) * sample_period_ms
+```
+
+`trigger_index` is always `0` in the current firmware; it is written
+explicitly in `cap_done` so future numbering changes don't silently
+corrupt archived CSVs.
 
 Error reasons specific to capture: `not_in_capture_mode`, `cap_busy`,
 `not_armed`, `not_ready`, `bad_trigger`, `missing_threshold`,
@@ -249,6 +264,42 @@ Error reasons specific to capture: `not_in_capture_mode`, `cap_busy`,
 ```
 
 ---
+
+## Time & clock synchronization
+
+All device timestamps (`ts` in telemetry, `tick_ms` in capture/sync events,
+`trigger_tick_ms` in `cap_done`) are the same quantity: the Arduino
+`millis()` counter since boot. They share one clock and one zero — no
+wall-clock time is involved.
+
+### Sync events
+
+```json
+{"status":"ok","event":"sync","seq":42,"tick_ms":12345678}
+{"status":"ok","event":"time","tick_ms":12345678}
+```
+
+`SYNC <seq>` exists for offset estimation: the PC records its own
+monotonic timestamps around the command and matches the response by
+`seq`. The midpoint of the round-trip approximates the moment the device
+read `millis()`, giving:
+
+```
+offset_ms = device_tick_ms − (send_ns + recv_ns) / 2 / 1e6
+```
+
+The PC collects N probes (default 25), sorts by RTT, and takes the
+median offset of the cleanest K (default 8). `GET TIME` is the same
+one-shot query without a sequence number — useful for manual checks.
+
+Both commands work in any work mode (`idle`, `monitor`, `capture`) and
+during calibration.
+
+### Out of scope for first phase
+
+Drift correction across long runs, periodic re-sync, wall-clock time,
+and cross-app sync sharing are intentionally omitted — the first phase
+only establishes a per-session offset for capture CSVs.
 
 ## State machine
 

@@ -6,6 +6,7 @@ capture_parser from core/.
 """
 import csv
 import json
+import time
 from typing import List, Optional
 
 import pyqtgraph as pg
@@ -21,6 +22,7 @@ from core.capture_parser import (
     CaptureDone, CaptureSample, CaptureStatus, parse_capture_event,
 )
 from core.serial_reader import SerialReader
+from core.sync_probe import SyncResult, SyncSample, compute_offset
 
 
 class CaptureWindow(QMainWindow):
@@ -39,6 +41,20 @@ class CaptureWindow(QMainWindow):
         self._poll.timeout.connect(lambda: self._reader.send_command('CAP STATUS'))
 
         self._samples: List[CaptureSample] = []
+        self._last_done: Optional[CaptureDone] = None
+
+        # Sync probe state
+        self._sync_active       = False
+        self._sync_n            = 25
+        self._sync_best_k       = 8
+        self._sync_seq          = 0
+        self._sync_pending_seq: Optional[int] = None
+        self._sync_pending_send_ns = 0
+        self._sync_samples: List[SyncSample] = []
+        self._sync_result: Optional[SyncResult] = None
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.timeout.connect(self._sync_probe_timeout)
 
         self._build_ui()
         self._wire()
@@ -114,10 +130,20 @@ class CaptureWindow(QMainWindow):
         self.btn_arm      = QPushButton('Arm')
         self.btn_trigger  = QPushButton('Trigger now')
         self.btn_abort    = QPushButton('Abort')
+        self.btn_sync     = QPushButton('Sync clock')
         self.btn_save_csv = QPushButton('Save CSV…')
-        for b in (self.btn_arm, self.btn_trigger, self.btn_abort, self.btn_save_csv):
+        for b in (self.btn_arm, self.btn_trigger, self.btn_abort,
+                  self.btn_sync, self.btn_save_csv):
             act_lay.addWidget(b)
         left.addWidget(act_box)
+
+        sync_box = QGroupBox('Clock sync')
+        sync_lay = QVBoxLayout(sync_box)
+        self.lbl_sync = QLabel('not synced')
+        self.lbl_sync.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_sync.setStyleSheet('color: #888888;')
+        sync_lay.addWidget(self.lbl_sync)
+        left.addWidget(sync_box)
 
         stat_box = QGroupBox('State')
         stat_lay = QVBoxLayout(stat_box)
@@ -169,6 +195,7 @@ class CaptureWindow(QMainWindow):
         self.btn_arm.clicked.connect(self._on_arm)
         self.btn_trigger.clicked.connect(lambda: self._reader.send_command('CAP TRIGGER'))
         self.btn_abort.clicked.connect(self._on_abort)
+        self.btn_sync.clicked.connect(lambda: self._start_sync_probe())
         self.btn_save_csv.clicked.connect(self._on_save_csv)
 
         self._reader.line_received.connect(self._on_line)
@@ -244,8 +271,16 @@ class CaptureWindow(QMainWindow):
                     self.lbl_status.setText('●  Connected (CAPTURE)')
                     self.lbl_status.setStyleSheet('color: #51cf66; padding: 0 8px;')
                     self._set_controls_enabled(True)
+                    # Auto-sync after handshake — gives a valid offset for CSV
+                    # metadata without the user having to click anything.
+                    self._start_sync_probe()
                 else:
                     self._on_wmode_timeout()
+            return
+
+        # Intercept sync responses before capture-event parsing.
+        if self._sync_active and '"event":"sync"' in line:
+            self._on_sync_line(line)
             return
 
         ev = parse_capture_event(line)
@@ -268,6 +303,7 @@ class CaptureWindow(QMainWindow):
         if len(self._samples) != ev.n:
             QMessageBox.warning(self, 'Capture',
                                 f'Expected {ev.n} samples, got {len(self._samples)}.')
+        self._last_done = ev
         self._plot_samples()
         self.lbl_state.setText('IDLE')
 
@@ -310,6 +346,22 @@ class CaptureWindow(QMainWindow):
         if not path:
             return
         with open(path, 'w', newline='', encoding='utf-8') as f:
+            if self._sync_result is not None:
+                r = self._sync_result
+                f.write(
+                    f'# sync_offset_ms={r.offset_ms:.3f} '
+                    f'rtt_ms_median={r.rtt_ms_median:.3f} '
+                    f'rtt_ms_best={r.rtt_ms_best:.3f} '
+                    f'n_used={r.n_used} n_samples={r.n_samples}\n'
+                )
+            if self._last_done is not None:
+                d = self._last_done
+                f.write(
+                    f'# trigger_tick_ms={d.trigger_tick_ms} '
+                    f'sample_period_ms={d.sample_period_ms} '
+                    f'pre={d.pre} post={d.post} '
+                    f'trigger_index={d.trigger_index}\n'
+                )
             w = csv.writer(f)
             w.writerow(['i', 'uab', 'ubc', 'uca', 'ia', 'ib', 'ic'])
             for s in self._samples:
@@ -318,11 +370,80 @@ class CaptureWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _set_controls_enabled(self, ok: bool) -> None:
         for b in (self.btn_arm, self.btn_trigger, self.btn_abort,
-                  self.btn_save_csv, self.rb_manual, self.rb_dip, self.spn_dip,
+                  self.btn_sync, self.btn_save_csv,
+                  self.rb_manual, self.rb_dip, self.spn_dip,
                   self.spn_pre, self.spn_post):
             b.setEnabled(ok)
 
+    # ------------------------------------------------------------------
+    # Clock-sync probe
+    def _start_sync_probe(self) -> None:
+        if self._sync_active or not self._wmode_confirmed:
+            return
+        self._sync_active = True
+        self._sync_samples.clear()
+        self._sync_result = None
+        self.lbl_sync.setText('syncing…')
+        self.lbl_sync.setStyleSheet('color: #ffd43b;')
+        self._sync_send_next()
+
+    def _sync_send_next(self) -> None:
+        if len(self._sync_samples) >= self._sync_n:
+            self._finish_sync_probe()
+            return
+        self._sync_seq += 1
+        self._sync_pending_seq     = self._sync_seq
+        self._sync_pending_send_ns = time.perf_counter_ns()
+        self._reader.send_command(f'SYNC {self._sync_seq}')
+        self._sync_timer.start(500)  # abort the probe if no reply
+
+    def _on_sync_line(self, line: str) -> None:
+        recv_ns = time.perf_counter_ns()
+        try:
+            d = json.loads(line)
+            seq     = int(d['seq'])
+            tick_ms = int(d['tick_ms'])
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            return
+        if seq != self._sync_pending_seq:
+            return
+        self._sync_timer.stop()
+        self._sync_samples.append(SyncSample(
+            seq     = seq,
+            send_ns = self._sync_pending_send_ns,
+            recv_ns = recv_ns,
+            tick_ms = tick_ms,
+        ))
+        self._sync_pending_seq = None
+        self._sync_send_next()
+
+    def _sync_probe_timeout(self) -> None:
+        # Single reply lost — move on. If too many are lost we still
+        # finish with what we have.
+        if not self._sync_active:
+            return
+        self._sync_pending_seq = None
+        self._sync_send_next()
+
+    def _finish_sync_probe(self) -> None:
+        self._sync_active = False
+        self._sync_timer.stop()
+        if not self._sync_samples:
+            self.lbl_sync.setText('sync failed')
+            self.lbl_sync.setStyleSheet('color: #ff6b6b;')
+            return
+        self._sync_result = compute_offset(self._sync_samples, self._sync_best_k)
+        r = self._sync_result
+        self.lbl_sync.setText(
+            f'offset {r.offset_ms:+.2f} ms\n'
+            f'RTT med {r.rtt_ms_median:.2f} / best {r.rtt_ms_best:.2f} ms\n'
+            f'used {r.n_used}/{r.n_samples}'
+        )
+        self.lbl_sync.setStyleSheet('color: #51cf66;')
+
+    # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802
+        self._sync_timer.stop()
         self._poll.stop()
         self._reader.stop()
         event.accept()

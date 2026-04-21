@@ -134,7 +134,8 @@ void sendCalibrationApplied(const char *phase, float gain, int32_t regVal)
 }
 
 void sendCaptureStatus(const char *state, uint16_t filled,
-                       uint16_t pre, uint16_t post, uint16_t total)
+                       uint16_t pre, uint16_t post, uint16_t total,
+                       uint32_t tick_ms)
 {
   Serial.print(F("{\"status\":\"ok\",\"event\":\"cap_status\",\"state\":\""));
   Serial.print(state);
@@ -146,6 +147,8 @@ void sendCaptureStatus(const char *state, uint16_t filled,
   Serial.print(post);
   Serial.print(F(",\"total\":"));
   Serial.print(total);
+  Serial.print(F(",\"tick_ms\":"));
+  Serial.print(tick_ms);
   Serial.println(F("}"));
 }
 
@@ -164,9 +167,37 @@ void sendCaptureSample(int16_t i,
   Serial.println(F("}"));
 }
 
-void sendCaptureDone(uint16_t n)
+void sendCaptureDone(uint16_t n, uint32_t trigger_tick_ms,
+                     uint16_t sample_period_ms,
+                     uint16_t pre, uint16_t post, int16_t trigger_index)
 {
   Serial.print(F("{\"status\":\"ok\",\"event\":\"cap_done\",\"n\":"));
   Serial.print(n);
+  Serial.print(F(",\"trigger_tick_ms\":"));
+  Serial.print(trigger_tick_ms);
+  Serial.print(F(",\"sample_period_ms\":"));
+  Serial.print(sample_period_ms);
+  Serial.print(F(",\"pre\":"));
+  Serial.print(pre);
+  Serial.print(F(",\"post\":"));
+  Serial.print(post);
+  Serial.print(F(",\"trigger_index\":"));
+  Serial.print(trigger_index);
+  Serial.println(F("}"));
+}
+
+void sendSync(uint32_t seq, uint32_t tick_ms)
+{
+  Serial.print(F("{\"status\":\"ok\",\"event\":\"sync\",\"seq\":"));
+  Serial.print(seq);
+  Serial.print(F(",\"tick_ms\":"));
+  Serial.print(tick_ms);
+  Serial.println(F("}"));
+}
+
+void sendTime(uint32_t tick_ms)
+{
+  Serial.print(F("{\"status\":\"ok\",\"event\":\"time\",\"tick_ms\":"));
+  Serial.print(tick_ms);
   Serial.println(F("}"));
 }
