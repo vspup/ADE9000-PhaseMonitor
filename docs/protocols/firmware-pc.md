@@ -101,7 +101,7 @@ No `ts` field — PC parser uses this to skip them as non-telemetry.
 
 Error reasons: `unknown_cmd`, `cmd_overflow`, `not_in_cal`, `no_phase`, `no_signal`,
 `gain_out_of_range`, `bad_vreal`, `bad_phase`, `bad_mode`, `bad_wmode`, `read_failed`, `save_failed`,
-`not_in_capture_mode`, `cap_busy`, `not_armed`, `not_ready`, `bad_trigger`, `missing_threshold`, `unknown_cap_cmd`.
+`not_in_capture_mode`, `cap_busy`, `not_armed`, `not_ready`, `bad_trigger`, `missing_threshold`, `bad_split`, `unknown_cap_cmd`.
 
 ---
 
@@ -118,6 +118,7 @@ ASCII text, newline-terminated (`\n`).
 | `SET WMODE capture` | Enter capture work mode — live stream suspended (→ `wmode` ack) |
 | `GET WMODE` | Report current work mode (→ `wmode` ack) |
 | `GET STATUS` | Consolidated snapshot: wmode, mmode, cal, streaming (→ `status` event) |
+| `CAP SET <pre> <post>` | Configure pre/post sample split (IDLE state only, `pre+post ≤ 500`) |
 | `CAP ARM manual` | Arm capture buffer, wait for manual trigger (CAPTURE mode only) |
 | `CAP ARM dip <V>` | Arm capture, auto-trigger when min(V_L-L) < threshold volts |
 | `CAP TRIGGER` | Manual trigger (only valid after `CAP ARM manual`) |
@@ -191,9 +192,9 @@ All `CAP …` commands return `{"status":"error","reason":"not_in_capture_mode"}
 when issued in MONITOR mode.
 
 **Sampling:** 10 ms period via ADE9000 half-cycle RMS registers (`xVRMSONE`,
-`xIRMSONE`). **Buffer:** 300 samples total = 100 pre-trigger + 200
-post-trigger (including the trigger sample at `i=0`). That is 1.0 s before
-and 2.0 s after the event at 10 ms resolution.
+`xIRMSONE`). **Buffer:** 500 samples total, with a runtime-configurable
+split between pre-trigger and post-trigger (`CAP SET`). Default is
+100 / 200 (1.0 s before, 2.0 s after). Sum must satisfy `pre + post ≤ 500`.
 
 ### FSM
 
@@ -217,7 +218,7 @@ samples) → `IDLE` (after `CAP READ` or `CAP ABORT`).
 ### Responses
 
 ```json
-{"status":"ok","event":"cap_status","state":"ARMED","filled":47,"total":300}
+{"status":"ok","event":"cap_status","state":"ARMED","filled":47,"pre":100,"post":200,"total":500}
 {"status":"ok","event":"cap_triggered"}
 {"status":"ok","event":"cap_aborted"}
 {"event":"cap_sample","i":-100,"uab":401.2,"ubc":398.7,"uca":403.1,"ia":1.234,"ib":1.251,"ic":1.220}
@@ -229,7 +230,7 @@ keyed by `event` and `i` (sample index: `-100..199`, `0` = trigger moment).
 
 Error reasons specific to capture: `not_in_capture_mode`, `cap_busy`,
 `not_armed`, `not_ready`, `bad_trigger`, `missing_threshold`,
-`unknown_cap_cmd`.
+`bad_split`, `unknown_cap_cmd`.
 
 ### Example flow
 
@@ -237,10 +238,10 @@ Error reasons specific to capture: `not_in_capture_mode`, `cap_busy`,
 → SET WMODE capture
 ← {"status":"ok","event":"wmode","wmode":"capture"}
 → CAP ARM dip 340
-← {"status":"ok","event":"cap_status","state":"ARMED","filled":0,"total":300}
+← {"status":"ok","event":"cap_status","state":"ARMED","filled":0,"total":500}
    (wait for dip, or poll CAP STATUS)
 → CAP STATUS
-← {"status":"ok","event":"cap_status","state":"READY","filled":300,"total":300}
+← {"status":"ok","event":"cap_status","state":"READY","filled":300,"total":500}
 → CAP READ
 ← {"event":"cap_sample","i":-100,…}
   …300 rows…

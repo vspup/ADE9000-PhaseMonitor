@@ -13,8 +13,8 @@ import serial.tools.list_ports
 from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtWidgets import (
     QComboBox, QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
-    QMainWindow, QMessageBox, QPushButton, QRadioButton, QToolBar, QVBoxLayout,
-    QWidget,
+    QMainWindow, QMessageBox, QPushButton, QRadioButton, QSpinBox, QToolBar,
+    QVBoxLayout, QWidget,
 )
 
 from core.capture_parser import (
@@ -78,6 +78,18 @@ class CaptureWindow(QMainWindow):
         # -------- left control column --------
         left = QVBoxLayout()
         left.setSpacing(10)
+
+        split_box = QGroupBox('Pre / Post split')
+        sp_lay = QHBoxLayout(split_box)
+        self.spn_pre = QSpinBox()
+        self.spn_pre.setRange(1, 499)
+        self.spn_pre.setValue(100)
+        self.spn_post = QSpinBox()
+        self.spn_post.setRange(1, 499)
+        self.spn_post.setValue(200)
+        sp_lay.addWidget(QLabel('Pre:'));  sp_lay.addWidget(self.spn_pre)
+        sp_lay.addWidget(QLabel('Post:')); sp_lay.addWidget(self.spn_post)
+        left.addWidget(split_box)
 
         trig_box = QGroupBox('Trigger')
         tb_lay = QVBoxLayout(trig_box)
@@ -270,6 +282,14 @@ class CaptureWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _on_arm(self) -> None:
+        pre, post = self.spn_pre.value(), self.spn_post.value()
+        if pre + post > 500:
+            QMessageBox.warning(self, 'Bad split',
+                                f'pre+post must be ≤ 500 (got {pre + post}).')
+            return
+        # Push the split before arming; firmware echoes cap_status back.
+        self._reader.send_command(f'CAP SET {pre} {post}')
+
         if self.rb_manual.isChecked():
             cmd = 'CAP ARM manual'
         else:
@@ -298,7 +318,8 @@ class CaptureWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _set_controls_enabled(self, ok: bool) -> None:
         for b in (self.btn_arm, self.btn_trigger, self.btn_abort,
-                  self.btn_save_csv, self.rb_manual, self.rb_dip, self.spn_dip):
+                  self.btn_save_csv, self.rb_manual, self.rb_dip, self.spn_dip,
+                  self.spn_pre, self.spn_post):
             b.setEnabled(ok)
 
     def closeEvent(self, event) -> None:  # noqa: N802

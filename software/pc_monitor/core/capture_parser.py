@@ -17,12 +17,14 @@ from typing import Optional, Union
 class CaptureStatus:
     state:  str   # "IDLE" | "ARMED" | "TRIGGERED" | "READY"
     filled: int
+    pre:    int
+    post:   int
     total:  int
 
 
 @dataclass
 class CaptureSample:
-    i:   int      # sample index: -100..-1 pre, 0 trigger, 1..199 post
+    i:   int      # sample index: -pre..-1 pre, 0 trigger, 1..post-1 post
     uab: float
     ubc: float
     uca: float
@@ -58,6 +60,8 @@ def parse_capture_event(line: str) -> Optional[CaptureEvent]:
             return CaptureStatus(
                 state  = str(d['state']),
                 filled = int(d['filled']),
+                pre    = int(d.get('pre',  0)),
+                post   = int(d.get('post', 0)),
                 total  = int(d['total']),
             )
         if ev == 'cap_done':

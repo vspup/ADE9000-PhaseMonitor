@@ -13,18 +13,28 @@ from core.packet_parser import parse_packet
 class TestCaptureStatus(unittest.TestCase):
     def test_full_status(self):
         line = ('{"status":"ok","event":"cap_status","state":"ARMED",'
-                '"filled":47,"total":300}')
+                '"filled":47,"pre":100,"post":200,"total":500}')
         e = parse_capture_event(line)
         self.assertIsInstance(e, CaptureStatus)
         self.assertEqual(e.state, "ARMED")
         self.assertEqual(e.filled, 47)
-        self.assertEqual(e.total, 300)
+        self.assertEqual(e.pre, 100)
+        self.assertEqual(e.post, 200)
+        self.assertEqual(e.total, 500)
 
     def test_all_four_states(self):
         for s in ("IDLE", "ARMED", "TRIGGERED", "READY"):
-            line = f'{{"event":"cap_status","state":"{s}","filled":0,"total":300}}'
+            line = (f'{{"event":"cap_status","state":"{s}","filled":0,'
+                    f'"pre":100,"post":200,"total":500}}')
             e = parse_capture_event(line)
             self.assertEqual(e.state, s)
+
+    def test_missing_pre_post_defaults_to_zero(self):
+        # Older firmware w/o pre/post fields — parser tolerates.
+        line = '{"event":"cap_status","state":"IDLE","filled":0,"total":300}'
+        e = parse_capture_event(line)
+        self.assertEqual(e.pre, 0)
+        self.assertEqual(e.post, 0)
 
 
 class TestCaptureSample(unittest.TestCase):
@@ -107,7 +117,7 @@ class TestPacketParserRegression(unittest.TestCase):
 
     def test_cap_status_not_a_packet(self):
         self.assertIsNone(parse_packet(
-            '{"status":"ok","event":"cap_status","state":"ARMED","filled":0,"total":300}'))
+            '{"status":"ok","event":"cap_status","state":"ARMED","filled":0,"pre":100,"post":200,"total":500}'))
 
     def test_cap_done_not_a_packet(self):
         self.assertIsNone(parse_packet('{"status":"ok","event":"cap_done","n":300}'))
