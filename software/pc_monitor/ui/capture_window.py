@@ -52,6 +52,9 @@ class CaptureWindow(QMainWindow):
         self._sync_pending_send_ns = 0
         self._sync_samples: List[SyncSample] = []
         self._sync_result: Optional[SyncResult] = None
+        # Baseline from the first successful sync in this session — subsequent
+        # syncs are reported as drift relative to it, so numbers stay readable.
+        self._sync_baseline_offset_ms: Optional[float] = None
         self._sync_timer = QTimer(self)
         self._sync_timer.setSingleShot(True)
         self._sync_timer.timeout.connect(self._sync_probe_timeout)
@@ -99,10 +102,10 @@ class CaptureWindow(QMainWindow):
         sp_lay = QHBoxLayout(split_box)
         self.spn_pre = QSpinBox()
         self.spn_pre.setRange(1, 499)
-        self.spn_pre.setValue(100)
+        self.spn_pre.setValue(10)
         self.spn_post = QSpinBox()
         self.spn_post.setRange(1, 499)
-        self.spn_post.setValue(200)
+        self.spn_post.setValue(400)
         sp_lay.addWidget(QLabel('Pre:'));  sp_lay.addWidget(self.spn_pre)
         sp_lay.addWidget(QLabel('Post:')); sp_lay.addWidget(self.spn_post)
         left.addWidget(split_box)
@@ -235,10 +238,13 @@ class CaptureWindow(QMainWindow):
             self._wmode_timeout.stop()
             self._poll.stop()
             self._wmode_confirmed = False
+            self._sync_baseline_offset_ms = None
             self.btn_connect.setText('Connect')
             self.lbl_status.setText('●  Disconnected')
             self.lbl_status.setStyleSheet('color: #888888; padding: 0 8px;')
             self._set_controls_enabled(False)
+            self.lbl_sync.setText('not synced')
+            self.lbl_sync.setStyleSheet('color: #888888;')
 
     @Slot(str)
     def _on_error(self, msg: str) -> None:
@@ -348,10 +354,12 @@ class CaptureWindow(QMainWindow):
         with open(path, 'w', newline='', encoding='utf-8') as f:
             if self._sync_result is not None:
                 r = self._sync_result
+                jitter = r.rtt_ms_median - r.rtt_ms_best
                 f.write(
                     f'# sync_offset_ms={r.offset_ms:.3f} '
                     f'rtt_ms_median={r.rtt_ms_median:.3f} '
                     f'rtt_ms_best={r.rtt_ms_best:.3f} '
+                    f'rtt_ms_jitter={jitter:.3f} '
                     f'n_used={r.n_used} n_samples={r.n_samples}\n'
                 )
             if self._last_done is not None:
@@ -434,9 +442,19 @@ class CaptureWindow(QMainWindow):
             return
         self._sync_result = compute_offset(self._sync_samples, self._sync_best_k)
         r = self._sync_result
+        jitter_ms = r.rtt_ms_median - r.rtt_ms_best
+
+        if self._sync_baseline_offset_ms is None:
+            self._sync_baseline_offset_ms = r.offset_ms
+            drift_line = 'baseline set (drift 0.00 ms)'
+        else:
+            drift = r.offset_ms - self._sync_baseline_offset_ms
+            drift_line = f'drift {drift:+.2f} ms'
+
         self.lbl_sync.setText(
-            f'offset {r.offset_ms:+.2f} ms\n'
-            f'RTT med {r.rtt_ms_median:.2f} / best {r.rtt_ms_best:.2f} ms\n'
+            f'{drift_line}\n'
+            f'RTT best {r.rtt_ms_best:.2f} / med {r.rtt_ms_median:.2f} ms\n'
+            f'jitter {jitter_ms:.2f} ms\n'
             f'used {r.n_used}/{r.n_samples}'
         )
         self.lbl_sync.setStyleSheet('color: #51cf66;')
