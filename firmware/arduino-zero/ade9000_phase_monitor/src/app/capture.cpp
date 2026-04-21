@@ -4,7 +4,7 @@
 
 static const uint16_t CAP_TOTAL        = 500;
 static const uint16_t CAP_PRE_DEFAULT  = 100;
-static const uint16_t CAP_POST_DEFAULT = 200;
+static const uint16_t CAP_POST_DEFAULT = 400;
 static const uint32_t CAP_PERIOD_MS    = 10;
 
 static uint16_t capPre  = CAP_PRE_DEFAULT;

@@ -7,7 +7,7 @@
 // Samples three voltages + three currents every ~10 ms from ADE9000
 // half-cycle RMS registers into a 500-slot ring buffer. The split
 // between pre-trigger and post-trigger samples is runtime-configurable
-// via captureConfigure() (default 100 / 200).
+// via captureConfigure() (default 100 / 400).
 //
 // FSM: IDLE → ARMED → TRIGGERED → READY → IDLE
 // Triggers: manual (CAP TRIGGER) or voltage dip (min(V) < threshold).

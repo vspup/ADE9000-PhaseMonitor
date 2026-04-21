@@ -102,7 +102,7 @@ class CaptureWindow(QMainWindow):
         sp_lay = QHBoxLayout(split_box)
         self.spn_pre = QSpinBox()
         self.spn_pre.setRange(1, 499)
-        self.spn_pre.setValue(10)
+        self.spn_pre.setValue(100)
         self.spn_post = QSpinBox()
         self.spn_post.setRange(1, 499)
         self.spn_post.setValue(400)
@@ -185,6 +185,7 @@ class CaptureWindow(QMainWindow):
         self.c_ic  = self.p_i.plot([], [], pen=pg.mkPen(colors['c'], width=2), name='Ic')
         for p in (self.p_v, self.p_i):
             p.addLine(x=0, pen=pg.mkPen('#ffd43b', width=1, style=Qt.PenStyle.DashLine))
+            p.setXRange(-100, 400, padding=0)
 
         plots_w = QWidget()
         plots_w.setLayout(plots)
