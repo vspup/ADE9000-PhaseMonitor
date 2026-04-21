@@ -88,6 +88,20 @@ void sendWorkModeOk(const char *wmode)
   Serial.println(F("\"}"));
 }
 
+void sendStatusSnapshot(const char *wmode, const char *mmode,
+                        bool calibrating, bool streaming)
+{
+  Serial.print(F("{\"status\":\"ok\",\"event\":\"status\",\"wmode\":\""));
+  Serial.print(wmode);
+  Serial.print(F("\",\"mmode\":\""));
+  Serial.print(mmode);
+  Serial.print(F("\",\"cal\":"));
+  Serial.print(calibrating ? F("true") : F("false"));
+  Serial.print(F(",\"streaming\":"));
+  Serial.print(streaming ? F("true") : F("false"));
+  Serial.println(F("}"));
+}
+
 void sendCalibrationPhase(const char *phase)
 {
   Serial.print(F("{\"status\":\"ok\",\"event\":\"cal_phase\",\"phase\":\""));
