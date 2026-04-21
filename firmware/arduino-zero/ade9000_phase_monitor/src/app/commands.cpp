@@ -41,6 +41,12 @@ static void dispatchCommand(char *buf)
     return;
   }
 
+  if (strcmp(tok1, "SYNC") == 0) {
+    uint32_t seq = tok2 ? (uint32_t)strtoul(tok2, nullptr, 10) : 0;
+    sendSync(seq, millis());
+    return;
+  }
+
   if (strcmp(tok1, "SET") == 0 && tok2 && strcmp(tok2, "MODE") == 0 && tok3) {
     if (strcmp(tok3, "delta") == 0) {
       modeSet(MODE_MEASURE_DELTA);
@@ -67,6 +73,11 @@ static void dispatchCommand(char *buf)
     } else {
       sendStatusError("bad_wmode", tok3);
     }
+    return;
+  }
+
+  if (strcmp(tok1, "GET") == 0 && tok2 && strcmp(tok2, "TIME") == 0) {
+    sendTime(millis());
     return;
   }
 

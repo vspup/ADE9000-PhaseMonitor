@@ -13,7 +13,7 @@ from core.packet_parser import parse_packet
 class TestCaptureStatus(unittest.TestCase):
     def test_full_status(self):
         line = ('{"status":"ok","event":"cap_status","state":"ARMED",'
-                '"filled":47,"pre":100,"post":200,"total":500}')
+                '"filled":47,"pre":100,"post":200,"total":500,"tick_ms":12345}')
         e = parse_capture_event(line)
         self.assertIsInstance(e, CaptureStatus)
         self.assertEqual(e.state, "ARMED")
@@ -21,6 +21,13 @@ class TestCaptureStatus(unittest.TestCase):
         self.assertEqual(e.pre, 100)
         self.assertEqual(e.post, 200)
         self.assertEqual(e.total, 500)
+        self.assertEqual(e.tick_ms, 12345)
+
+    def test_tick_ms_absent_defaults_to_zero(self):
+        line = ('{"event":"cap_status","state":"IDLE","filled":0,'
+                '"pre":100,"post":200,"total":500}')
+        e = parse_capture_event(line)
+        self.assertEqual(e.tick_ms, 0)
 
     def test_all_four_states(self):
         for s in ("IDLE", "ARMED", "TRIGGERED", "READY"):
@@ -63,10 +70,26 @@ class TestCaptureSample(unittest.TestCase):
 
 
 class TestCaptureDone(unittest.TestCase):
-    def test_done(self):
-        e = parse_capture_event('{"status":"ok","event":"cap_done","n":300}')
+    def test_full(self):
+        line = ('{"status":"ok","event":"cap_done","n":300,'
+                '"trigger_tick_ms":42000,"sample_period_ms":10,'
+                '"pre":100,"post":200,"trigger_index":0}')
+        e = parse_capture_event(line)
         self.assertIsInstance(e, CaptureDone)
         self.assertEqual(e.n, 300)
+        self.assertEqual(e.trigger_tick_ms, 42000)
+        self.assertEqual(e.sample_period_ms, 10)
+        self.assertEqual(e.pre, 100)
+        self.assertEqual(e.post, 200)
+        self.assertEqual(e.trigger_index, 0)
+
+    def test_legacy_done_without_sync_fields(self):
+        # Tolerate older firmware: absent fields default to 0.
+        e = parse_capture_event('{"status":"ok","event":"cap_done","n":300}')
+        self.assertEqual(e.n, 300)
+        self.assertEqual(e.trigger_tick_ms, 0)
+        self.assertEqual(e.sample_period_ms, 0)
+        self.assertEqual(e.trigger_index, 0)
 
 
 class TestNonCaptureLines(unittest.TestCase):

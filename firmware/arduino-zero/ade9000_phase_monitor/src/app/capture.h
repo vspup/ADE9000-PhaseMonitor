@@ -36,6 +36,8 @@ bool         captureConfigure(uint16_t pre, uint16_t post);
 uint16_t     captureGetPre();
 uint16_t     captureGetPost();
 uint16_t     captureGetTotal();
+uint16_t     captureGetPeriodMs();
+uint32_t     captureGetTriggerTick();
 
 // Returns false if state doesn't permit the transition.
 bool         captureArm(CaptureTriggerType t, float dipThresholdV);

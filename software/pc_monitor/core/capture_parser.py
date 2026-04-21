@@ -15,11 +15,12 @@ from typing import Optional, Union
 
 @dataclass
 class CaptureStatus:
-    state:  str   # "IDLE" | "ARMED" | "TRIGGERED" | "READY"
-    filled: int
-    pre:    int
-    post:   int
-    total:  int
+    state:   str   # "IDLE" | "ARMED" | "TRIGGERED" | "READY"
+    filled:  int
+    pre:     int
+    post:    int
+    total:   int
+    tick_ms: int   # device millis() when the status was emitted (0 if absent)
 
 
 @dataclass
@@ -35,7 +36,12 @@ class CaptureSample:
 
 @dataclass
 class CaptureDone:
-    n: int        # number of samples streamed
+    n:                int   # number of samples streamed
+    trigger_tick_ms:  int   # device millis() at moment trigger fired (0 if absent)
+    sample_period_ms: int   # spacing between adjacent samples (0 if absent)
+    pre:              int
+    post:             int
+    trigger_index:    int   # index i of the trigger sample (0 for now)
 
 
 CaptureEvent = Union[CaptureStatus, CaptureSample, CaptureDone]
@@ -58,14 +64,22 @@ def parse_capture_event(line: str) -> Optional[CaptureEvent]:
             )
         if ev == 'cap_status':
             return CaptureStatus(
-                state  = str(d['state']),
-                filled = int(d['filled']),
-                pre    = int(d.get('pre',  0)),
-                post   = int(d.get('post', 0)),
-                total  = int(d['total']),
+                state   = str(d['state']),
+                filled  = int(d['filled']),
+                pre     = int(d.get('pre',  0)),
+                post    = int(d.get('post', 0)),
+                total   = int(d['total']),
+                tick_ms = int(d.get('tick_ms', 0)),
             )
         if ev == 'cap_done':
-            return CaptureDone(n=int(d['n']))
+            return CaptureDone(
+                n                = int(d['n']),
+                trigger_tick_ms  = int(d.get('trigger_tick_ms',  0)),
+                sample_period_ms = int(d.get('sample_period_ms', 0)),
+                pre              = int(d.get('pre',  0)),
+                post             = int(d.get('post', 0)),
+                trigger_index    = int(d.get('trigger_index', 0)),
+            )
         return None
     except (json.JSONDecodeError, KeyError, ValueError, TypeError):
         return None

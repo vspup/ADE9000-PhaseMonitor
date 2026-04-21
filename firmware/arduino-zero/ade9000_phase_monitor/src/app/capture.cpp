@@ -22,11 +22,12 @@ static CaptureTriggerType trigType       = CAP_TRIG_NONE;
 static float              dipThreshold   = 0.0f;
 static bool               manualRequest  = false;
 
-static uint16_t writeIdx   = 0;
-static uint16_t triggerIdx = 0;
-static uint16_t armedCount = 0;   // samples captured since ARM (caps at capPre)
-static uint16_t postCount  = 0;   // samples captured since trigger (incl. trigger)
-static uint32_t lastTickMs = 0;
+static uint16_t writeIdx       = 0;
+static uint16_t triggerIdx     = 0;
+static uint16_t armedCount     = 0;   // samples captured since ARM (caps at capPre)
+static uint16_t postCount      = 0;   // samples captured since trigger (incl. trigger)
+static uint32_t lastTickMs     = 0;
+static uint32_t triggerTickMs  = 0;   // millis() at moment of trigger firing
 
 void captureInit()
 {
@@ -35,6 +36,7 @@ void captureInit()
   manualRequest = false;
   writeIdx = triggerIdx = armedCount = postCount = 0;
   lastTickMs = 0;
+  triggerTickMs = 0;
 }
 
 static void resetBuffers(uint32_t now)
@@ -42,6 +44,7 @@ static void resetBuffers(uint32_t now)
   writeIdx = triggerIdx = armedCount = postCount = 0;
   manualRequest = false;
   lastTickMs = now;
+  triggerTickMs = 0;
 }
 
 bool captureArm(CaptureTriggerType t, float dipV)
@@ -79,9 +82,11 @@ bool captureConfigure(uint16_t pre, uint16_t post)
   return true;
 }
 
-uint16_t captureGetPre()   { return capPre; }
-uint16_t captureGetPost()  { return capPost; }
-uint16_t captureGetTotal() { return CAP_TOTAL; }
+uint16_t captureGetPre()          { return capPre; }
+uint16_t captureGetPost()         { return capPost; }
+uint16_t captureGetTotal()        { return CAP_TOTAL; }
+uint16_t captureGetPeriodMs()     { return (uint16_t)CAP_PERIOD_MS; }
+uint32_t captureGetTriggerTick()  { return triggerTickMs; }
 
 CaptureState captureGetState() { return state; }
 
@@ -137,9 +142,10 @@ void captureTick(uint32_t now_ms)
     // Only arm trigger once we have a full pre-roll of samples.
     if (armedCount >= capPre && triggerFires(s))
     {
-      triggerIdx = writeIdx;
-      state      = CAP_TRIGGERED;
-      postCount  = 1;   // current sample counts as i=0
+      triggerIdx    = writeIdx;
+      triggerTickMs = now_ms;
+      state         = CAP_TRIGGERED;
+      postCount     = 1;   // current sample counts as i=0
     }
   }
   else // CAP_TRIGGERED
@@ -157,7 +163,7 @@ void captureSendStatus()
                   : (state == CAP_TRIGGERED) ? (uint16_t)(capPre + postCount)
                   : (state == CAP_READY)     ? (uint16_t)(capPre + capPost)
                                              : (uint16_t)0;
-  sendCaptureStatus(captureStateName(state), filled, capPre, capPost, CAP_TOTAL);
+  sendCaptureStatus(captureStateName(state), filled, capPre, capPost, CAP_TOTAL, millis());
 }
 
 bool captureStreamRead()
@@ -181,7 +187,9 @@ bool captureStreamRead()
                       s.Ia,  s.Ib,  s.Ic);
   }
 
-  sendCaptureDone((uint16_t)(capPre + capPost));
+  sendCaptureDone((uint16_t)(capPre + capPost),
+                  triggerTickMs, (uint16_t)CAP_PERIOD_MS,
+                  capPre, capPost, (int16_t)0);
   state         = CAP_IDLE;
   trigType      = CAP_TRIG_NONE;
   manualRequest = false;
