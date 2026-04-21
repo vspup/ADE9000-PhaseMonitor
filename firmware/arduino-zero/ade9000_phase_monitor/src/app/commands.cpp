@@ -48,20 +48,23 @@ static void dispatchCommand(char *buf)
       modeSet(MODE_MEASURE_WYE);
       sendStatusOk("mode_set");
     } else {
-      sendStatusError("bad_mode");
+      sendStatusError("bad_mode", tok3);
     }
     return;
   }
 
   if (strcmp(tok1, "SET") == 0 && tok2 && strcmp(tok2, "WMODE") == 0 && tok3) {
-    if (strcmp(tok3, "monitor") == 0) {
+    if (strcmp(tok3, "idle") == 0) {
+      workModeSet(WORK_MODE_IDLE);
+      sendWorkModeOk("idle");
+    } else if (strcmp(tok3, "monitor") == 0) {
       workModeSet(WORK_MODE_MONITOR);
       sendWorkModeOk("monitor");
     } else if (strcmp(tok3, "capture") == 0) {
       workModeSet(WORK_MODE_CAPTURE);
       sendWorkModeOk("capture");
     } else {
-      sendStatusError("bad_wmode");
+      sendStatusError("bad_wmode", tok3);
     }
     return;
   }
@@ -122,7 +125,7 @@ static void dispatchCommand(char *buf)
         tt  = CAP_TRIG_DIP;
         thr = atof(tok4);
       } else {
-        sendStatusError("bad_trigger");
+        sendStatusError("bad_trigger", tok3);
         return;
       }
       if (!captureArm(tt, thr)) { sendStatusError("cap_busy"); return; }
@@ -143,7 +146,7 @@ static void dispatchCommand(char *buf)
     return;
   }
 
-  sendStatusError("unknown_cmd");
+  sendStatusError("unknown_cmd", tok1);
 }
 
 void commandsProcess()

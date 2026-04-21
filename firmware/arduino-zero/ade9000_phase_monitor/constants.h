@@ -23,13 +23,15 @@ enum MeasurementMode : uint8_t
 };
 
 // Operational (work) mode — orthogonal to MeasurementMode.
-// MONITOR: existing live-stream behaviour (default).
-// CAPTURE: reserved for future startup-capture app; firmware holds normal
-//          packet stream quiet and waits for capture-specific commands.
+// IDLE:    boot default. No telemetry, no capture — firmware only answers
+//          commands. Client must explicitly SET WMODE to start work.
+// MONITOR: 5 Hz live telemetry stream.
+// CAPTURE: fast-RMS ring-buffer capture pipeline.
 enum WorkMode : uint8_t
 {
-  WORK_MODE_MONITOR = 0,
-  WORK_MODE_CAPTURE = 1
+  WORK_MODE_IDLE    = 0,
+  WORK_MODE_MONITOR = 1,
+  WORK_MODE_CAPTURE = 2
 };
 
 #endif

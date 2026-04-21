@@ -20,10 +20,14 @@ void sendStatusOk(const char *event, const char *name, const char *version)
   Serial.println(F("\"}"));
 }
 
-void sendStatusError(const char *reason)
+void sendStatusError(const char *reason, const char *got)
 {
   Serial.print(F("{\"status\":\"error\",\"reason\":\""));
   Serial.print(reason);
+  if (got) {
+    Serial.print(F("\",\"got\":\""));
+    Serial.print(got);
+  }
   Serial.println(F("\"}"));
 }
 

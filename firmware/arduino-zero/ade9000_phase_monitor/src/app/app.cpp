@@ -44,9 +44,14 @@ void appLoop()
   // During calibration the main data loop is suspended — commands still processed above.
   if (calibrationIsActive()) return;
 
-  // In CAPTURE work mode the live monitoring stream is suspended; capture
-  // pipeline samples fast-RMS into a ring buffer instead.
-  if (workModeGet() == WORK_MODE_CAPTURE) {
+  WorkMode wm = workModeGet();
+
+  // IDLE: firmware only answers commands on boot until the client explicitly
+  // picks a work mode. Keeps Serial Monitor quiet during manual debugging.
+  if (wm == WORK_MODE_IDLE) return;
+
+  // CAPTURE: live stream suspended, fast-RMS ring buffer instead.
+  if (wm == WORK_MODE_CAPTURE) {
     captureTick(millis());
     return;
   }

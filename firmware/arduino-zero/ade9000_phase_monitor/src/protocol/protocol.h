@@ -4,7 +4,9 @@
 #include "../../types.h"
 
 void sendStatusOk(const char *event, const char *name = nullptr, const char *version = nullptr);
-void sendStatusError(const char *reason);
+// When `got` is non-null, the offending token is echoed back as "got":"..."
+// to aid debugging of typos via Serial Monitor.
+void sendStatusError(const char *reason, const char *got = nullptr);
 void sendVoltageJson(const VoltageSnapshot &snapshot, const EventFlags &flags);
 
 // Work-mode acknowledgement. `wmode` must be "monitor" or "capture".
