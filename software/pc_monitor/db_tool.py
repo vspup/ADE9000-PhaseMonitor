@@ -1322,10 +1322,10 @@ class MainApp(tk.Tk):
         except Exception as exc:
             self._log_message("ERR", f"auto-poll: {exc}")
             return
-        # Reschedule eagerly so we keep polling even if the reply is late or
-        # malformed; _apply_cap_status will cancel once state leaves ACTIVE.
-        if self._cap_state in self._CAP_ACTIVE_STATES:
-            self._cap_poll_after_id = self.after(1000, self._poll_cap_status)
+        # Always reschedule — _apply_cap_status cancels when state leaves ACTIVE.
+        # Gating on _cap_state stops polling on garbled responses: parse_cap_status
+        # returns None → _cap_state stays None → condition false → poll dies silently.
+        self._cap_poll_after_id = self.after(1000, self._poll_cap_status)
 
     def _cancel_cap_polling(self) -> None:
         if self._cap_poll_after_id is not None:
