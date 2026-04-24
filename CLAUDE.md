@@ -22,6 +22,8 @@ Arduino Zero + ADE9000 metering IC → USB/UART → PySide6 PC application.
   - `ui/` — main window, plots, control panel, calibration dialog
 - `docs/` — technical documentation and decisions
 - `docs/protocols/` — firmware ↔ PC communication protocol
+  - `firmware-pc.md` — ADE9000 ↔ PC wire protocol
+  - `sequencer.md` — PC-side orchestration across ADE9000 + Distribution for startup-sequence capture. Read before touching any cross-device logic.
 - `docs/standards/` — living development standards
 - `reference/` — datasheets, schematics (PDFs, in .claudeignore)
 - `data/` — measurement logs (not tracked)

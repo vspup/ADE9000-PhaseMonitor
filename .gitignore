@@ -63,6 +63,10 @@ data/*.txt
 # Keep the folder itself
 !data/.gitkeep
 
+# Distribution-board bring-up tool: capture CSVs and per-user config
+software/pc_monitor/captures/
+software/pc_monitor/db_tool_config.json
+
 # -----------------------------------------------------------------------------
 # IDE and editors
 # -----------------------------------------------------------------------------

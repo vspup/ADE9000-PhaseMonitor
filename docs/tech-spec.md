@@ -4,20 +4,31 @@
 
 ### 1.1 Purpose
 
-Develop a hardware-software system for monitoring three-phase voltage behavior during power supply startup.
+Develop a standalone hardware-software tool for monitoring three-phase voltage behavior. The tool is usable on its own (bench diagnostics, grid audits, long-term monitoring) and can be embedded as a subsystem in larger projects.
 
 The system is intended for engineering diagnostics and analysis of:
 
 - voltage dips
 - phase imbalance (unbalance)
-- transient behavior during startup
+- transient behavior
 - abnormal grid conditions
+
+### 1.1.1 Scope of this document
+
+This spec covers the **ADE9000 PhaseMonitor tool only** — Arduino Zero + ADE9000 firmware and its PySide6 PC application. It does NOT describe any larger system that may use this tool as a building block.
+
+When this tool is embedded in the MPS2P startup-sequence analyzer, cross-device orchestration (coordinating it with the MPS2P Distribution Board) is specified separately:
+
+- Umbrella system spec: `../../mps2p-tran/TECH_SPEC.md`
+- PC-side orchestration contract: `docs/protocols/sequencer.md`
+
+These external documents adapt to this one, not the other way around. Changes here must remain compatible with the wire protocol in `docs/protocols/firmware-pc.md`.
 
 ---
 
 ### 1.2 Key Objective
 
-Measure and visualize **three-phase line-to-line voltages (delta, 400V)** in real time, with event detection and logging.
+Measure and visualize **three-phase voltages (delta L-L or wye L-N, up to 400V)** in real time, with event detection, per-phase calibration, and logging.
 
 ---
 
@@ -296,15 +307,21 @@ ts,uab,ubc,uca,uavg,unb,f,state
 
 ## 12. Operating Modes
 
-### 12.1 Monitoring Mode
+Two orthogonal axes, both exposed over UART (see `docs/protocols/firmware-pc.md`):
 
-* continuous measurement
-* low data rate
+### 12.1 Measurement mode (`SET MODE …`)
 
-### 12.2 Event Mode
+* `delta` — line-to-line Uab / Ubc / Uca (default)
+* `wye` — line-to-neutral Va / Vb / Vc
+* `cal_ln` — per-phase calibration
 
-* triggered recording
-* includes pre/post buffer
+### 12.2 Work mode (`SET WMODE …`)
+
+* `idle` — boot default, silent, command-only
+* `monitor` — 5 Hz JSON telemetry for live plotting
+* `capture` — telemetry suspended; capture pipeline active (pre/post ring buffer, `CAP ARM` / `CAP TRIGGER` / `CAP READ`)
+
+Capture buffer capacity is 500 samples at ~10 ms period, with a runtime-configurable pre/post split via `CAP SET <pre> <post>` (`pre + post ≤ 500`). Default split is 100 / 200 → a 3 s window around the trigger. Triggers: `manual` (PC-initiated via `CAP TRIGGER`) or `dip <V>` (voltage threshold). See the protocol doc for the full FSM.
 
 ---
 
@@ -403,21 +420,3 @@ Minimal viable system:
 * send data to PC
 * display 4 graphs
 * record startup events
-
----
-
-```
-
----
-
-Если хочешь, дальше логично:
-
-👉 сразу перейти к **реализации прошивки (Stage 2)**  
-и я дам тебе **рабочий код под Arduino Zero + ADE9000**  
-
-или
-
-👉 сначала сделать **Python GUI skeleton**, чтобы можно было тестировать поток параллельно.
-
-Как удобнее?
-```
