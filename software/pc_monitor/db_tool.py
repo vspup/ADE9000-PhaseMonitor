@@ -485,6 +485,18 @@ class CapturePlotWindow(tk.Toplevel):
         self._trace_vars: dict[str, tk.BooleanVar] = {}
         self._xaxis_var = tk.StringVar(value="samples")  # "samples" or "ms"
 
+        self._axis_limits: dict[str, dict] = {
+            "raw":     {"xlim": None, "ylim": None},
+            "voltage": {"xlim": None, "ylim": None},
+            "derived": {"xlim": None, "ylim": None},
+        }
+        self._show_markers = tk.BooleanVar(value=False)
+        self._status_var = tk.StringVar(value="")
+        self._xmin_var = tk.StringVar(value="")
+        self._xmax_var = tk.StringVar(value="")
+        self._ymin_var = tk.StringVar(value="")
+        self._ymax_var = tk.StringVar(value="")
+
         self._build_ui()
         self._rebuild_traces()
 
@@ -537,7 +549,43 @@ class CapturePlotWindow(tk.Toplevel):
         self._traces_frame = ttk.LabelFrame(self, text="Traces", padding=4)
         self._traces_frame.pack(fill="x", padx=6, pady=(0, 4))
 
-        # Plot area
+        # Status bar for axis-limit validation errors (packed bottom-up before plot).
+        self._status_lbl = ttk.Label(
+            self, textvariable=self._status_var, foreground="#c62828",
+        )
+        self._status_lbl.pack(side="bottom", fill="x", padx=8, pady=(0, 4))
+
+        # Bottom axis-limits panel (packed bottom-up before plot).
+        bottom_bar = ttk.LabelFrame(self, text="Axis limits", padding=6)
+        bottom_bar.pack(side="bottom", fill="x", padx=6, pady=(0, 2))
+
+        x_row = ttk.Frame(bottom_bar)
+        x_row.pack(fill="x", pady=2)
+        ttk.Label(x_row, text="X min:").pack(side="left", padx=(0, 2))
+        ttk.Entry(x_row, textvariable=self._xmin_var, width=10).pack(side="left", padx=(0, 4))
+        ttk.Label(x_row, text="X max:").pack(side="left", padx=(0, 2))
+        ttk.Entry(x_row, textvariable=self._xmax_var, width=10).pack(side="left", padx=(0, 6))
+        ttk.Button(x_row, text="Apply X", command=self._apply_x, width=9).pack(side="left", padx=2)
+        ttk.Button(x_row, text="Auto X",  command=self._auto_x,  width=8).pack(side="left", padx=2)
+
+        y_row = ttk.Frame(bottom_bar)
+        y_row.pack(fill="x", pady=2)
+        ttk.Label(y_row, text="Y min:").pack(side="left", padx=(0, 2))
+        ttk.Entry(y_row, textvariable=self._ymin_var, width=10).pack(side="left", padx=(0, 4))
+        ttk.Label(y_row, text="Y max:").pack(side="left", padx=(0, 2))
+        ttk.Entry(y_row, textvariable=self._ymax_var, width=10).pack(side="left", padx=(0, 6))
+        ttk.Button(y_row, text="Apply Y", command=self._apply_y, width=9).pack(side="left", padx=2)
+        ttk.Button(y_row, text="Auto Y",  command=self._auto_y,  width=8).pack(side="left", padx=2)
+
+        extra_row = ttk.Frame(bottom_bar)
+        extra_row.pack(fill="x", pady=2)
+        ttk.Button(extra_row, text="Auto all", command=self._auto_all).pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(
+            extra_row, text="Show markers",
+            variable=self._show_markers, command=self._redraw,
+        ).pack(side="left")
+
+        # Plot area (fills remaining space between traces and axis-limits panel).
         plot_frame = ttk.Frame(self)
         plot_frame.pack(fill="both", expand=True, padx=6, pady=6)
 
@@ -646,12 +694,17 @@ class CapturePlotWindow(tk.Toplevel):
             if use_ms else xs_samples
         )
 
+        show_m = self._show_markers.get()
+        marker = "o" if show_m else None
+        msize = 3 if show_m else 0
+
         any_drawn = False
         for label, ys in series:
             var = self._trace_vars.get(label)
             if var is not None and not var.get():
                 continue
-            self._ax.plot(xs, ys, label=label, linewidth=1.1)
+            self._ax.plot(xs, ys, label=label, linewidth=1.1,
+                          marker=marker, markersize=msize)
             any_drawn = True
 
         if self._trigger_idx is not None and 0 <= self._trigger_idx < len(xs):
@@ -671,7 +724,74 @@ class CapturePlotWindow(tk.Toplevel):
         )
         if any_drawn:
             self._ax.legend(loc="best", fontsize=8, ncol=2)
+
+        lim = self._axis_limits[mode]
+        if lim["xlim"] is not None:
+            self._ax.set_xlim(lim["xlim"])
+        if lim["ylim"] is not None:
+            self._ax.set_ylim(lim["ylim"])
+
+        self._sync_limit_fields()
         self._canvas.draw_idle()
+
+    def _sync_limit_fields(self) -> None:
+        xl = self._ax.get_xlim()
+        yl = self._ax.get_ylim()
+        self._xmin_var.set(f"{xl[0]:.4g}")
+        self._xmax_var.set(f"{xl[1]:.4g}")
+        self._ymin_var.set(f"{yl[0]:.4g}")
+        self._ymax_var.set(f"{yl[1]:.4g}")
+
+    def _apply_x(self) -> None:
+        try:
+            xmin = float(self._xmin_var.get())
+            xmax = float(self._xmax_var.get())
+        except ValueError:
+            self._status_var.set("X limits error: enter valid numbers")
+            return
+        if xmin >= xmax:
+            self._status_var.set("X limits error: X min must be less than X max")
+            return
+        self._status_var.set("")
+        mode = self._mode_var.get()
+        self._axis_limits[mode]["xlim"] = (xmin, xmax)
+        self._ax.set_xlim(xmin, xmax)
+        self._canvas.draw_idle()
+
+    def _apply_y(self) -> None:
+        try:
+            ymin = float(self._ymin_var.get())
+            ymax = float(self._ymax_var.get())
+        except ValueError:
+            self._status_var.set("Y limits error: enter valid numbers")
+            return
+        if ymin >= ymax:
+            self._status_var.set("Y limits error: Y min must be less than Y max")
+            return
+        self._status_var.set("")
+        mode = self._mode_var.get()
+        self._axis_limits[mode]["ylim"] = (ymin, ymax)
+        self._ax.set_ylim(ymin, ymax)
+        self._canvas.draw_idle()
+
+    def _auto_x(self) -> None:
+        mode = self._mode_var.get()
+        self._axis_limits[mode]["xlim"] = None
+        self._status_var.set("")
+        self._redraw()
+
+    def _auto_y(self) -> None:
+        mode = self._mode_var.get()
+        self._axis_limits[mode]["ylim"] = None
+        self._status_var.set("")
+        self._redraw()
+
+    def _auto_all(self) -> None:
+        mode = self._mode_var.get()
+        self._axis_limits[mode]["xlim"] = None
+        self._axis_limits[mode]["ylim"] = None
+        self._status_var.set("")
+        self._redraw()
 
 
 # ---------------------------------------------------------------------------
