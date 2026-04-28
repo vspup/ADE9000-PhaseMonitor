@@ -73,10 +73,17 @@ def _cfg(output_dir: str) -> OrchestratorConfig:
 
 
 def _run_worker(worker: OrchestratorWorker) -> None:
-    """Start worker and block until finished (max 5 s)."""
-    _app()
+    """Start worker and block until finished (max 5 s).
+
+    `worker.wait()` blocks the test thread but does not pump its event loop,
+    so cross-thread queued signals stay parked until we drain them with
+    `processEvents()`. Without this drain the connect() callbacks recording
+    `done` / `failed` / `progress` are never invoked and assertions fail.
+    """
+    app = _app()
     worker.start()
     worker.wait(5000)
+    app.processEvents()
 
 
 # ---------------------------------------------------------------------------
@@ -110,39 +117,39 @@ class TestWorkerHappyPath(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sess = _fake_session(tmp)
             done_payloads: List[CaptureSession] = []
-            failed_msgs:   List[str]            = []
+            failed_payloads: List[tuple]        = []
 
             ade  = MagicMock()
             dist = MagicMock()
             worker = OrchestratorWorker(_cfg(tmp), ade, dist)
             worker.done.connect(done_payloads.append)
-            worker.failed.connect(failed_msgs.append)
+            worker.failed.connect(lambda msg, info: failed_payloads.append((msg, info)))
 
             with patch("core.orchestrator_worker.Orchestrator") as MockOrc, \
                  patch("core.orchestrator_worker.write_session"):
                 MockOrc.return_value.run.return_value = sess
                 _run_worker(worker)
 
-            self.assertEqual(len(done_payloads), 1)
-            self.assertEqual(len(failed_msgs),   0)
+            self.assertEqual(len(done_payloads),    1)
+            self.assertEqual(len(failed_payloads), 0)
             self.assertIs(done_payloads[0], sess)
 
     def test_failed_not_emitted_on_success(self):
         with tempfile.TemporaryDirectory() as tmp:
             sess = _fake_session(tmp)
-            failed_msgs: List[str] = []
+            failed_payloads: List[tuple] = []
 
             ade  = MagicMock()
             dist = MagicMock()
             worker = OrchestratorWorker(_cfg(tmp), ade, dist)
-            worker.failed.connect(failed_msgs.append)
+            worker.failed.connect(lambda msg, info: failed_payloads.append((msg, info)))
 
             with patch("core.orchestrator_worker.Orchestrator") as MockOrc, \
                  patch("core.orchestrator_worker.write_session"):
                 MockOrc.return_value.run.return_value = sess
                 _run_worker(worker)
 
-            self.assertEqual(failed_msgs, [])
+            self.assertEqual(failed_payloads, [])
 
     def test_progress_signals_forwarded(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -197,32 +204,58 @@ class TestWorkerHappyPath(unittest.TestCase):
 class TestWorkerErrorPath(unittest.TestCase):
     def test_orchestrator_error_emits_failed(self):
         with tempfile.TemporaryDirectory() as tmp:
-            done_payloads: List[object] = []
-            failed_msgs:   List[str]   = []
+            done_payloads:   List[object] = []
+            failed_payloads: List[tuple]  = []
 
             ade  = MagicMock()
             dist = MagicMock()
             worker = OrchestratorWorker(_cfg(tmp), ade, dist)
             worker.done.connect(done_payloads.append)
-            worker.failed.connect(failed_msgs.append)
+            worker.failed.connect(lambda msg, info: failed_payloads.append((msg, info)))
 
             with patch("core.orchestrator_worker.Orchestrator") as MockOrc:
                 MockOrc.return_value.run.side_effect = RuntimeError("port gone")
                 _run_worker(worker)
 
-            self.assertEqual(len(done_payloads), 0)
-            self.assertEqual(len(failed_msgs),   1)
-            self.assertIn("port gone", failed_msgs[0])
+            self.assertEqual(len(done_payloads),    0)
+            self.assertEqual(len(failed_payloads), 1)
+            msg, info = failed_payloads[0]
+            self.assertIn("port gone", msg)
+            self.assertEqual(info, {})   # non-OrchestratorError → no structured info
 
-    def test_write_session_error_emits_failed(self):
+    def test_orchestrator_error_carries_structured_info(self):
+        from core.orchestrator import OrchestratorError
         with tempfile.TemporaryDirectory() as tmp:
-            sess = _fake_session(tmp)
-            failed_msgs: List[str] = []
+            failed_payloads: List[tuple] = []
 
             ade  = MagicMock()
             dist = MagicMock()
             worker = OrchestratorWorker(_cfg(tmp), ade, dist)
-            worker.failed.connect(failed_msgs.append)
+            worker.failed.connect(lambda msg, info: failed_payloads.append((msg, info)))
+
+            with patch("core.orchestrator_worker.Orchestrator") as MockOrc:
+                MockOrc.return_value.run.side_effect = OrchestratorError(
+                    "VBUS already present",
+                    phase="FIRE", device="Distribution", command="START",
+                )
+                _run_worker(worker)
+
+            self.assertEqual(len(failed_payloads), 1)
+            msg, info = failed_payloads[0]
+            self.assertIn("VBUS", msg)
+            self.assertEqual(info["phase"],   "FIRE")
+            self.assertEqual(info["device"],  "Distribution")
+            self.assertEqual(info["command"], "START")
+
+    def test_write_session_error_emits_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sess = _fake_session(tmp)
+            failed_payloads: List[tuple] = []
+
+            ade  = MagicMock()
+            dist = MagicMock()
+            worker = OrchestratorWorker(_cfg(tmp), ade, dist)
+            worker.failed.connect(lambda msg, info: failed_payloads.append((msg, info)))
 
             with patch("core.orchestrator_worker.Orchestrator") as MockOrc, \
                  patch("core.orchestrator_worker.write_session",
@@ -230,8 +263,9 @@ class TestWorkerErrorPath(unittest.TestCase):
                 MockOrc.return_value.run.return_value = sess
                 _run_worker(worker)
 
-            self.assertEqual(len(failed_msgs), 1)
-            self.assertIn("disk full", failed_msgs[0])
+            self.assertEqual(len(failed_payloads), 1)
+            msg, _info = failed_payloads[0]
+            self.assertIn("disk full", msg)
 
     def test_done_not_emitted_on_error(self):
         with tempfile.TemporaryDirectory() as tmp:

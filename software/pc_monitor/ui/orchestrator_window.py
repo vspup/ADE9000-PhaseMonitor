@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Optional
 
 import serial.tools.list_ports
-from PySide6.QtCore import QThread, Qt, Signal, Slot
+from PySide6.QtCore import QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -44,6 +45,12 @@ _GREEN = "#4caf50"
 _RED   = "#f44336"
 _GREY  = "#888888"
 _DOT   = "●"
+
+# Heartbeat: COM-port enumeration tick between sessions, so the indicator
+# dots flip red within ~2 s if the user yanks a USB cable. Cheap (no I/O,
+# just OS port list); paused while a scan or capture session is running so
+# we never race the worker's serial handles.
+_HEARTBEAT_MS = 2000
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +87,12 @@ class OrchestratorWindow(QMainWindow):
         self._populate_all_ports()
         self._update_run_button()
 
+        self._heartbeat = QTimer(self)
+        self._heartbeat.setInterval(_HEARTBEAT_MS)
+        self._heartbeat.timeout.connect(self._on_heartbeat)
+        self._heartbeat.start()
+        self._on_heartbeat()   # immediate first tick so dots reflect state at startup
+
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -101,6 +114,7 @@ class OrchestratorWindow(QMainWindow):
         vbox.addWidget(self._run_btn)
 
         vbox.addWidget(self._build_progress_group())
+        vbox.addWidget(self._build_error_panel())
         vbox.addWidget(self._build_result_group())
 
     # --- Devices group ---
@@ -224,6 +238,36 @@ class OrchestratorWindow(QMainWindow):
         vl.addWidget(self._log)
         return box
 
+    # --- Error panel ---
+
+    def _build_error_panel(self) -> QFrame:
+        """Persistent error panel — shown after a failed session, hidden on next run.
+
+        Surfaces *which device* refused *which command* (when available from
+        OrchestratorError) so the user doesn't have to scrape the log.
+        """
+        self._error_box = QFrame()
+        self._error_box.setVisible(False)
+        self._error_box.setFrameShape(QFrame.Shape.StyledPanel)
+        self._error_box.setStyleSheet(
+            f"QFrame {{ border: 1px solid {_RED}; border-radius: 4px; "
+            f"background: rgba(244, 67, 54, 0.08); }}"
+        )
+        vl = QVBoxLayout(self._error_box)
+        vl.setContentsMargins(10, 6, 10, 6)
+        vl.setSpacing(2)
+
+        self._error_title = QLabel()
+        self._error_title.setStyleSheet(f"color: {_RED}; font-weight: bold;")
+        self._error_detail = QLabel()
+        self._error_detail.setWordWrap(True)
+        self._error_detail.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        vl.addWidget(self._error_title)
+        vl.addWidget(self._error_detail)
+        return self._error_box
+
     # --- Result group ---
 
     def _build_result_group(self) -> QGroupBox:
@@ -272,10 +316,49 @@ class OrchestratorWindow(QMainWindow):
         colour = _GREEN if found else _RED
         label.setStyleSheet(f"color: {colour}; font-size: 16px;")
 
+    def _set_indicator_colour(self, label: QLabel, colour: str) -> None:
+        label.setStyleSheet(f"color: {colour}; font-size: 16px;")
+
     def _update_run_button(self) -> None:
         has_ard  = bool(self._ard_port.currentText())
         has_dist = bool(self._dist_port.currentText())
         self._run_btn.setEnabled(has_ard and has_dist)
+
+    # ------------------------------------------------------------------
+    # Heartbeat: cheap port-presence check between sessions
+    # ------------------------------------------------------------------
+
+    @Slot()
+    def _on_heartbeat(self) -> None:
+        """Refresh dot indicators based on whether selected ports still exist.
+
+        Pure OS port enumeration — no serial I/O, so safe to run on a timer.
+        Skipped while a worker (scan or capture) holds the ports, to keep
+        signal-cause attribution clean (a colour flip during a session would
+        otherwise be misleading: the port is open, just not in our list).
+
+        Detects only the cable-yank case; an unresponsive but still-enumerated
+        device shows green here. A real PING-based liveness check would require
+        opening the port, which would clash with concurrent worker access — not
+        worth the complexity for a 2 s tick.
+        """
+        if self._worker is not None and self._worker.isRunning():
+            return
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            return
+
+        available = {p.device for p in serial.tools.list_ports.comports()}
+        for dot, combo in (
+            (self._ard_dot,  self._ard_port),
+            (self._dist_dot, self._dist_port),
+        ):
+            port = combo.currentText()
+            if not port:
+                self._set_indicator_colour(dot, _GREY)
+            elif port in available:
+                self._set_indicator_colour(dot, _GREEN)
+            else:
+                self._set_indicator_colour(dot, _RED)
 
     # ------------------------------------------------------------------
     # Scan slot
@@ -347,6 +430,7 @@ class OrchestratorWindow(QMainWindow):
         self._scan_btn.setEnabled(False)
         self._log.clear()
         self._result_box.setVisible(False)
+        self._error_box.setVisible(False)
 
         cfg = OrchestratorConfig(
             arduino_port  = ard_port,
@@ -398,9 +482,33 @@ class OrchestratorWindow(QMainWindow):
         dlg = CaptureViewDialog(self._last_session, parent=self)
         dlg.show()
 
-    @Slot(str)
-    def _on_failed(self, msg: str) -> None:
-        self._log.appendPlainText(f"[ERROR] {msg}")
+    @Slot(str, dict)
+    def _on_failed(self, msg: str, info: dict) -> None:
+        phase   = info.get("phase",   "")
+        device  = info.get("device",  "")
+        command = info.get("command", "")
+
+        # Log line: tagged with phase/device when available so it stays
+        # greppable even after the panel is dismissed by the next run.
+        prefix_parts = ["ERROR"]
+        if phase:
+            prefix_parts.append(phase)
+        if device:
+            prefix_parts.append(device)
+        prefix = "][".join(prefix_parts)
+        cmd_suffix = f" (CMD={command})" if command else ""
+        self._log.appendPlainText(f"[{prefix}]{cmd_suffix} {msg}")
+
+        # Persistent panel: title summarises device + command, body is the message.
+        if device and command:
+            self._error_title.setText(f"{device} failed on {command}")
+        elif device:
+            self._error_title.setText(f"{device} failed")
+        else:
+            self._error_title.setText("Capture failed")
+        self._error_detail.setText(msg)
+        self._error_box.setVisible(True)
+
         self._run_btn.setEnabled(True)
         self._scan_btn.setEnabled(True)
 

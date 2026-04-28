@@ -77,7 +77,26 @@ class CaptureSession:
 # ---------------------------------------------------------------------------
 
 class OrchestratorError(Exception):
-    """Raised when the capture sequence cannot complete cleanly."""
+    """Raised when the capture sequence cannot complete cleanly.
+
+    Optional structured fields (``phase``, ``device``, ``command``) let the
+    UI surface *which* device failed *which* command without parsing the
+    message string. They default to empty when the call site doesn't supply
+    them, so existing ``raise OrchestratorError("…")`` keeps working.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        phase:   str = "",
+        device:  str = "",
+        command: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.phase   = phase
+        self.device  = device
+        self.command = command
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +218,8 @@ class Orchestrator:
             self._log("FIRE", "START refused (vbus_error) — aborting ADE9000")
             self._safe_ade_abort()
             raise OrchestratorError(
-                "Distribution refused START: VBUS already present"
+                "Distribution refused START: VBUS already present",
+                phase="FIRE", device="Distribution", command="START",
             ) from exc
         if cfg.trigger_mode == "manual":
             self._log("FIRE", "CAP TRIGGER → ADE9000")
@@ -259,7 +279,8 @@ class Orchestrator:
                 if time.monotonic() > ade_deadline:
                     raise OrchestratorError(
                         f"ADE9000 did not reach READY within "
-                        f"{self._ADE_DRAIN_TIMEOUT:.0f} s"
+                        f"{self._ADE_DRAIN_TIMEOUT:.0f} s",
+                        phase="DRAIN", device="ADE9000", command="CAP STATUS",
                     )
                 cs = self._ade.cap_status()
                 if cs.state == "READY":
@@ -273,14 +294,18 @@ class Orchestrator:
                 if time.monotonic() > dist_deadline:
                     raise OrchestratorError(
                         f"Distribution did not reach READY within "
-                        f"{self._DIST_DRAIN_TIMEOUT:.0f} s"
+                        f"{self._DIST_DRAIN_TIMEOUT:.0f} s",
+                        phase="DRAIN", device="Distribution", command="CAP STATUS",
                     )
                 cs = self._dist.cap_status()
                 if cs.state == "READY":
                     dist_cs = cs
                     self._log("DRAIN", "Distribution READY")
                 elif cs.state == "ERROR":
-                    raise OrchestratorError("Distribution capture FSM reached ERROR")
+                    raise OrchestratorError(
+                        "Distribution capture FSM reached ERROR",
+                        phase="DRAIN", device="Distribution", command="CAP STATUS",
+                    )
                 else:
                     self._log("DRAIN",
                               f"Distribution {cs.state}  {cs.samples}")
