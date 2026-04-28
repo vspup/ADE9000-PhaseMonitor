@@ -38,8 +38,30 @@ class ScanResult:
 # Internal probes — each opens the port, sends one command, reads reply
 # ---------------------------------------------------------------------------
 
+def _is_ade9000_json(data: bytes) -> bool:
+    """Return True if `data` contains at least one recognisable ADE9000 JSON line."""
+    for sep in (b"\r\n", b"\n", b"\r"):
+        for chunk in data.split(sep):
+            try:
+                d = json.loads(chunk.decode("utf-8", errors="ignore").strip())
+                if d.get("event") == "sync" or "ts" in d:
+                    return True
+            except (json.JSONDecodeError, ValueError):
+                pass
+    return False
+
+
 def _probe_ade9000(port: str, timeout: float) -> bool:
-    """Return True if port responds like an ADE9000 at 115200."""
+    """Return True if port looks like an ADE9000 at 115200.
+
+    Strategy — listen first, send only if silent:
+    1. Open at 115200, wait up to half the timeout for autonomous telemetry
+       (ADE9000 streams JSON at 5 Hz in monitor mode).  No bytes sent →
+       harmless to any other device sharing the bus.
+    2. If nothing arrives, send "SYNC 1" and wait for the rest of the timeout.
+       This covers the case where the Arduino was left in WMODE capture
+       (no autonomous stream).
+    """
     try:
         with serial.Serial(
             port=port, baudrate=115200,
@@ -47,22 +69,26 @@ def _probe_ade9000(port: str, timeout: float) -> bool:
             stopbits=serial.STOPBITS_ONE, timeout=0.05,
         ) as s:
             s.reset_input_buffer()
-            s.write(b"SYNC 1\n")
-            deadline = time.monotonic() + timeout
+
+            # Phase 1: listen silently for autonomous telemetry
+            listen_until = time.monotonic() + timeout / 2
             buf = b""
+            while time.monotonic() < listen_until:
+                chunk = s.read(256)
+                if chunk:
+                    buf += chunk
+                    if _is_ade9000_json(buf):
+                        return True
+
+            # Phase 2: send SYNC 1, wait for reply (capture-mode fallback)
+            s.write(b"SYNC 1\n")
+            deadline = time.monotonic() + timeout / 2
             while time.monotonic() < deadline:
                 chunk = s.read(256)
                 if chunk:
                     buf += chunk
-                    for sep in (b"\r\n", b"\n", b"\r"):
-                        while sep in buf:
-                            line_b, buf = buf.split(sep, 1)
-                            try:
-                                d = json.loads(line_b.decode("utf-8", errors="ignore").strip())
-                                if d.get("event") == "sync" or "ts" in d:
-                                    return True
-                            except (json.JSONDecodeError, ValueError):
-                                pass
+                    if _is_ade9000_json(buf):
+                        return True
     except (serial.SerialException, OSError):
         pass
     return False

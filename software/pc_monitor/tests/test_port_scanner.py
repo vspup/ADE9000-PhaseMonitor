@@ -77,12 +77,6 @@ class TestProbeAde9000(unittest.TestCase):
                    side_effect=_serial.SerialException("access denied")):
             self.assertFalse(_probe_ade9000("COM99", timeout=0.1))
 
-    def test_sends_sync_command(self):
-        mock_s = _make_serial(_sync_reply())
-        with patch("core.port_scanner.serial.Serial", return_value=mock_s):
-            _probe_ade9000("COM99", timeout=0.2)
-        mock_s.write.assert_called_once_with(b"SYNC 1\n")
-
     def test_lf_terminated_reply(self):
         reply = json.dumps({"event": "sync", "seq": 1, "tick_ms": 0}).encode() + b"\n"
         self.assertTrue(self._run(reply))
@@ -90,6 +84,21 @@ class TestProbeAde9000(unittest.TestCase):
     def test_multi_line_finds_sync(self):
         data = b"NOISE\r\n" + _sync_reply()
         self.assertTrue(self._run(data))
+
+    def test_telemetry_found_in_listen_phase_no_sync_sent(self):
+        # Telemetry arrives immediately → SYNC 1 must NOT be sent (listen phase wins)
+        mock_s = _make_serial(_telemetry_reply())
+        with patch("core.port_scanner.serial.Serial", return_value=mock_s):
+            result = _probe_ade9000("COM99", timeout=0.2)
+        self.assertTrue(result)
+        mock_s.write.assert_not_called()
+
+    def test_sync_sent_when_silent(self):
+        # No autonomous data → probe falls back to sending SYNC 1
+        mock_s = _make_serial(b"")
+        with patch("core.port_scanner.serial.Serial", return_value=mock_s):
+            _probe_ade9000("COM99", timeout=0.2)
+        mock_s.write.assert_called_once_with(b"SYNC 1\n")
 
 
 # ---------------------------------------------------------------------------
