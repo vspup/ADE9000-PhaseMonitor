@@ -1,14 +1,14 @@
 """Post-session data viewer — three-row matplotlib viewer with full controls.
 
 Layout (top to bottom):
-  Top bar — row 1   Focus mode (All|V|I|ADC) + global toggles + Reset View
+  Header            [← Back]  [Fullscreen]  Title  [Reset View]
+  Top bar — row 1   Focus mode (All|V|I|ADC) + Point markers toggle
   Top bar — row 2   ADC channel checkboxes + presets
   V row             [Y controls "Voltage scale"]  [voltage canvas + outside legend]
   I row             [Y controls "Current scale"]  [current canvas + outside legend]
   ADC row           [Y controls "ADC scale"]      [ADC canvas + outside legend]
   X bar — row 1     Time range: X min / X max / Apply X / Auto X
   X bar — row 2     Trigger:    ±W ms window / Centre on trigger
-  Cursor pane       Structured live readout (per group, multi-line, monospace)
   Marker pane       M1/M2 readouts per group + Δt
 
 Each plot row is a self-contained QWidget (`_PlotRow`) with its own Figure +
@@ -16,12 +16,12 @@ Canvas — that way the per-plot Y-controls stand visually next to the plot
 they affect, without fighting matplotlib's internal subplot geometry. The
 X axes are kept in sync via xlim_changed callbacks (one row drives, others
 follow). The matplotlib NavigationToolbar is intentionally absent — all view
-control flows through the dedicated input fields and buttons; mouse scroll
-zooms around the cursor and middle-drag (or Shift+left-drag) pans.
+control flows through the dedicated X / Y input fields. There is no mouse
+zoom or pan — view changes happen only through the spinboxes.
 
-Marker model:
-  - Group "ADE9000" spans the V + I rows; a click on either places the same
-    snapped marker on both, and the readout shows V and I together.
+Marker model (left/right click):
+  - Group "ADE9000" spans the V + I rows; a left-click on either places the
+    same snapped marker on both, and the readout shows V and I together.
   - Group "Distribution" is only the ADC row; clicks place markers there
     alone. Right-click clears the markers in the clicked group.
 
@@ -40,11 +40,6 @@ Trigger highlighting:
     "TRIGGER  t = 0.0 ms" label at the top of the band; a second corner
     label shows the current view span ("view: ±W ms"). Both texts are
     re-anchored on every X- or Y-limit change.
-
-Synchronised cursor:
-  - When the mouse moves over any plot, a thin dotted vertical line is
-    drawn on every plot at the same X (toggle: "Sync cursor"). The cursor
-    readout below the plots updates simultaneously.
 
 Point markers:
   - Global toggle adds round dot markers to every data point on every line;
@@ -115,10 +110,6 @@ _VIEW_LABEL_KW = dict(
     color="#444", fontsize=8, ha="right", va="top",
 )
 
-_CURSOR_LINE_STYLE = dict(
-    color="#222", linewidth=0.8, linestyle=":", alpha=0.55, zorder=2,
-)
-
 _MARKER_COLORS = ("#00bcd4", "#e91e63")   # M1 cyan, M2 pink
 
 _HIDDEN_LEGEND_ALPHA = 0.35
@@ -128,7 +119,7 @@ _POINT_MARKER_KW = dict(marker="o", markersize=3.0, markeredgewidth=0.0)
 _HINT_TEXT = (
     "Left-click on a plot to place a marker (cycles M1 ↔ M2). "
     "Right-click clears the markers in that group. "
-    "Scroll = zoom X.  Middle-drag (or Shift+left-drag) = pan X."
+    "Click a legend entry to toggle its series."
 )
 
 _AUTO_X_PAD_FRAC = 0.02
@@ -268,8 +259,6 @@ class _PlotRow(QWidget):
 
     xlim_changed_by_user = Signal(float, float)
     clicked              = Signal(int, float)   # button (1=left, 3=right), xdata
-    cursor_moved         = Signal(float)        # raw xdata under mouse
-    cursor_left          = Signal()
 
     def __init__(
         self,
@@ -295,9 +284,7 @@ class _PlotRow(QWidget):
         self._trigger_band              = None
         self._trigger_label             = None
         self._view_label                = None
-        self._cursor_line: Optional[Line2D] = None
         self._suppress_next_click       = False
-        self._pan_origin: Optional[tuple[float, float, float]] = None  # (px, xmin0, xmax0)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -352,12 +339,8 @@ class _PlotRow(QWidget):
     def _wire_signals(self) -> None:
         self._ax.callbacks.connect("xlim_changed", self._on_xlim_changed)
         self._ax.callbacks.connect("ylim_changed", self._on_ylim_changed)
-        self._canvas.mpl_connect("button_press_event",   self._on_button_press)
-        self._canvas.mpl_connect("button_release_event", self._on_button_release)
-        self._canvas.mpl_connect("motion_notify_event",  self._on_motion)
-        self._canvas.mpl_connect("axes_leave_event",     self._on_leave)
-        self._canvas.mpl_connect("scroll_event",         self._on_scroll)
-        self._canvas.mpl_connect("pick_event",           self._on_legend_pick)
+        self._canvas.mpl_connect("button_press_event", self._on_button_press)
+        self._canvas.mpl_connect("pick_event",         self._on_legend_pick)
 
     # ---------------- X-axis ----------------
 
@@ -449,24 +432,6 @@ class _PlotRow(QWidget):
             transform=self._ax.transAxes, **_VIEW_LABEL_KW,
         )
 
-    # ---------------- Cursor (synchronised vertical line) ----------------
-
-    def set_cursor_x(self, x: Optional[float]) -> None:
-        if x is None:
-            if self._cursor_line is not None:
-                try:
-                    self._cursor_line.remove()
-                except (ValueError, AttributeError):
-                    pass
-                self._cursor_line = None
-                self._canvas.draw_idle()
-            return
-        if self._cursor_line is None:
-            self._cursor_line = self._ax.axvline(x, **_CURSOR_LINE_STYLE)
-        else:
-            self._cursor_line.set_xdata([x, x])
-        self._canvas.draw_idle()
-
     # ---------------- Point markers ----------------
 
     def set_point_markers(self, on: bool) -> None:
@@ -479,17 +444,10 @@ class _PlotRow(QWidget):
                 line.set_marker("")
         self._canvas.draw_idle()
 
-    # ---------------- Mouse: click / pick / pan / scroll ----------------
+    # ---------------- Mouse: marker click + legend pick ----------------
 
     def _on_button_press(self, event: MouseEvent) -> None:
-        if event.inaxes is not self._ax:
-            return
-        # Pan: middle-button or Shift+left-button anywhere on the canvas.
-        if event.button == 2 or (event.button == 1 and event.key == "shift"):
-            xmin0, xmax0 = self._ax.get_xlim()
-            self._pan_origin = (event.x, xmin0, xmax0)
-            return
-        if event.xdata is None:
+        if event.inaxes is not self._ax or event.xdata is None:
             return
         # A pick_event for the legend fires *before* button_press_event for
         # the same physical click; if the legend swallowed it, suppress the
@@ -499,50 +457,6 @@ class _PlotRow(QWidget):
             return
         if event.button in (1, 3):
             self.clicked.emit(int(event.button), float(event.xdata))
-
-    def _on_button_release(self, _event: MouseEvent) -> None:
-        self._pan_origin = None
-
-    def _on_motion(self, event: MouseEvent) -> None:
-        if self._pan_origin is not None:
-            self._handle_pan(event)
-            return
-        if event.inaxes is not self._ax or event.xdata is None:
-            return
-        self.cursor_moved.emit(float(event.xdata))
-
-    def _on_leave(self, _event: MouseEvent) -> None:
-        self.cursor_left.emit()
-
-    def _on_scroll(self, event: MouseEvent) -> None:
-        """Wheel = zoom X around cursor. Up = zoom in, down = zoom out."""
-        if event.inaxes is not self._ax or event.xdata is None:
-            return
-        factor = 0.85 if event.button == "up" else 1.15
-        xmin, xmax = self._ax.get_xlim()
-        x = event.xdata
-        new_min = x - (x - xmin) * factor
-        new_max = x + (xmax - x) * factor
-        if new_max <= new_min:
-            return
-        self._ax.set_xlim(new_min, new_max)
-        self._refresh_trigger_overlay()
-        self._canvas.draw_idle()
-
-    def _handle_pan(self, event: MouseEvent) -> None:
-        if event.x is None or self._pan_origin is None:
-            return
-        px0, xmin0, xmax0 = self._pan_origin
-        bbox = self._ax.bbox
-        width_px = bbox.width
-        if width_px <= 0:
-            return
-        dx_data = (event.x - px0) * (xmax0 - xmin0) / width_px
-        new_min = xmin0 - dx_data
-        new_max = xmax0 - dx_data
-        self._ax.set_xlim(new_min, new_max)
-        self._refresh_trigger_overlay()
-        self._canvas.draw_idle()
 
     def _on_legend_pick(self, event: PickEvent) -> None:
         artist = event.artist
@@ -623,7 +537,6 @@ class CaptureViewDialog(QDialog):
 
         self._session_id         = session.session_id
         self._x_sync_in_progress = False
-        self._sync_cursor_on     = True
         self._point_markers_on   = False
 
         self._build_data(session)
@@ -803,13 +716,6 @@ class CaptureViewDialog(QDialog):
         self._focus_btns.idClicked.connect(self._on_focus_changed)
 
         h.addSpacing(16)
-        self._sync_cursor_cb = QCheckBox("Sync cursor")
-        self._sync_cursor_cb.setChecked(self._sync_cursor_on)
-        self._sync_cursor_cb.setToolTip(
-            "Show a synchronized vertical cursor on every plot at the mouse X")
-        self._sync_cursor_cb.toggled.connect(self._on_sync_cursor_toggled)
-        h.addWidget(self._sync_cursor_cb)
-
         self._point_markers_cb = QCheckBox("Point markers")
         self._point_markers_cb.setChecked(self._point_markers_on)
         self._point_markers_cb.setToolTip(
@@ -922,37 +828,28 @@ class CaptureViewDialog(QDialog):
         s.setSuffix(" ms")
         return s
 
-    # ---- Status panel (cursor + markers, structured) ----
+    # ---- Status panel (markers only) ----
 
     def _build_status_panel(self) -> QWidget:
         box = QFrame()
         box.setFrameShape(QFrame.Shape.StyledPanel)
-        v = QVBoxLayout(box)
-        v.setContentsMargins(6, 4, 6, 4)
-        v.setSpacing(2)
-
-        cursor_head = QLabel("Cursor")
-        cursor_head.setStyleSheet("font-weight: 600;")
-        v.addWidget(cursor_head)
-        self._cursor_lbl = QLabel("  —")
-        self._cursor_lbl.setStyleSheet(
-            "font-family: 'Consolas','Cascadia Mono',monospace; "
-            "color: #222;"
-        )
-        self._cursor_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._cursor_lbl.setWordWrap(False)
-        v.addWidget(self._cursor_lbl)
+        h = QHBoxLayout(box)
+        h.setContentsMargins(6, 4, 6, 4)
+        h.setSpacing(8)
 
         markers_head = QLabel("Markers")
         markers_head.setStyleSheet("font-weight: 600;")
-        v.addWidget(markers_head)
-        self._marker_lbl = QLabel("  " + _HINT_TEXT)
+        markers_head.setAlignment(Qt.AlignTop)
+        h.addWidget(markers_head)
+
+        self._marker_lbl = QLabel(_HINT_TEXT)
         self._marker_lbl.setStyleSheet(
             "font-family: 'Consolas','Cascadia Mono',monospace; color: #222;"
         )
         self._marker_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._marker_lbl.setWordWrap(True)
-        v.addWidget(self._marker_lbl)
+        self._marker_lbl.setAlignment(Qt.AlignTop)
+        h.addWidget(self._marker_lbl, stretch=1)
         return box
 
     # ---------------- X-axis sync ----------------
@@ -963,8 +860,6 @@ class CaptureViewDialog(QDialog):
             row.clicked.connect(
                 lambda btn, x, r=row: self._on_row_clicked(r, btn, x)
             )
-            row.cursor_moved.connect(self._on_cursor_moved)
-            row.cursor_left.connect(self._on_cursor_left)
 
     def _all_rows(self) -> list[_PlotRow]:
         return [self._row_v, self._row_i, self._row_d]
@@ -1051,12 +946,6 @@ class CaptureViewDialog(QDialog):
         self._row_d.setVisible(idx in (0, 3))
 
     # ---------------- Global toggles ----------------
-
-    def _on_sync_cursor_toggled(self, on: bool) -> None:
-        self._sync_cursor_on = on
-        if not on:
-            for row in self._all_rows():
-                row.set_cursor_x(None)
 
     def _on_point_markers_toggled(self, on: bool) -> None:
         self._point_markers_on = on
@@ -1150,33 +1039,5 @@ class CaptureViewDialog(QDialog):
                     f"  {g.name:<13}Δt   = {dt:+9.2f} ms"
                 )
             out_lines.append("")
-        text = "\n".join(out_lines).rstrip() if any_markers else "  " + _HINT_TEXT
+        text = "\n".join(out_lines).rstrip() if any_markers else _HINT_TEXT
         self._marker_lbl.setText(text)
-
-    # ---------------- Cursor live readout ----------------
-
-    def _on_cursor_moved(self, x: float) -> None:
-        out_lines: list[str] = []
-        for g in self._mgroups:
-            if not g.times:
-                continue
-            idx = _snap_index(g.times, x)
-            t_snapped = g.times[idx]
-            head = f"  {g.name:<13} t = {t_snapped:+9.2f} ms"
-            out_lines.append(head)
-            vals = [_format_value(label, unit, values, idx)
-                    for (label, unit, values) in g.series]
-            out_lines.extend(
-                _wrap_columns(vals, g.columns_per_line, " " * 17)
-            )
-        self._cursor_lbl.setText(
-            "\n".join(out_lines) if out_lines else "  —"
-        )
-        if self._sync_cursor_on:
-            for row in self._all_rows():
-                row.set_cursor_x(x)
-
-    def _on_cursor_left(self) -> None:
-        self._cursor_lbl.setText("  —")
-        for row in self._all_rows():
-            row.set_cursor_x(None)
