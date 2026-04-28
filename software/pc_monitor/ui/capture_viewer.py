@@ -833,6 +833,9 @@ class CaptureViewDialog(QDialog):
     def _build_status_panel(self) -> QWidget:
         box = QFrame()
         box.setFrameShape(QFrame.Shape.StyledPanel)
+        # Reserve a stable height so the plots above do not shift up/down
+        # when markers are placed or cleared.
+        box.setFixedHeight(150)
         h = QHBoxLayout(box)
         h.setContentsMargins(6, 4, 6, 4)
         h.setSpacing(8)
@@ -843,8 +846,10 @@ class CaptureViewDialog(QDialog):
         h.addWidget(markers_head)
 
         self._marker_lbl = QLabel(_HINT_TEXT)
+        # No hardcoded text colour — let the active Qt palette drive it so
+        # the text stays readable on both light and dark themes.
         self._marker_lbl.setStyleSheet(
-            "font-family: 'Consolas','Cascadia Mono',monospace; color: #222;"
+            "font-family: 'Consolas','Cascadia Mono',monospace;"
         )
         self._marker_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._marker_lbl.setWordWrap(True)
