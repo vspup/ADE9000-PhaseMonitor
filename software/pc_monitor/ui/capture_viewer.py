@@ -1,13 +1,15 @@
 """Post-session data viewer — three-row matplotlib viewer with full controls.
 
 Layout (top to bottom):
-  Top bar       Focus mode (All|V|I|ADC), ADC channel filter, Reset View
-  V row         [Y controls] [voltage canvas + outside legend]
-  I row         [Y controls] [current canvas + outside legend]
-  ADC row       [Y controls] [ADC canvas + outside legend]
-  X bar         X min/max, Apply X, Auto X, Trigger ±[W ms] window
-  Cursor pane   live readout at mouse position (snapped to nearest sample)
-  Marker pane   M1/M2 readouts per group + Δt
+  Top bar — row 1   Focus mode (All|V|I|ADC) + global toggles + Reset View
+  Top bar — row 2   ADC channel checkboxes + presets
+  V row             [Y controls "Voltage scale"]  [voltage canvas + outside legend]
+  I row             [Y controls "Current scale"]  [current canvas + outside legend]
+  ADC row           [Y controls "ADC scale"]      [ADC canvas + outside legend]
+  X bar — row 1     Time range: X min / X max / Apply X / Auto X
+  X bar — row 2     Trigger:    ±W ms window / Centre on trigger
+  Cursor pane       Structured live readout (per group, multi-line, monospace)
+  Marker pane       M1/M2 readouts per group + Δt
 
 Each plot row is a self-contained QWidget (`_PlotRow`) with its own Figure +
 Canvas — that way the per-plot Y-controls stand visually next to the plot
@@ -34,9 +36,19 @@ Signal stylization:
     ADE9000 readings dominate visually when both are on screen.
 
 Trigger highlighting:
-  - 2.0 px red dashed vertical at t = 0 with a translucent ±5 ms band and
-    a "TRIGGER" label anchored just under the upper Y limit. The band and
-    label are re-anchored on every Y-limit change.
+  - 2.0 px red dashed vertical at t = 0 with a translucent ±5 ms band and a
+    "TRIGGER  t = 0.0 ms" label at the top of the band; a second corner
+    label shows the current view span ("view: ±W ms"). Both texts are
+    re-anchored on every X- or Y-limit change.
+
+Synchronised cursor:
+  - When the mouse moves over any plot, a thin dotted vertical line is
+    drawn on every plot at the same X (toggle: "Sync cursor"). The cursor
+    readout below the plots updates simultaneously.
+
+Point markers:
+  - Global toggle adds round dot markers to every data point on every line;
+    useful when zooming in to see actual sample positions.
 """
 from __future__ import annotations
 
@@ -99,12 +111,21 @@ _TRIGGER_LABEL_KW = dict(
     color="red", fontsize=9, fontweight="bold",
     ha="center", va="bottom",
 )
+_VIEW_LABEL_KW = dict(
+    color="#444", fontsize=8, ha="right", va="top",
+)
+
+_CURSOR_LINE_STYLE = dict(
+    color="#222", linewidth=0.8, linestyle=":", alpha=0.55, zorder=2,
+)
 
 _MARKER_COLORS = ("#00bcd4", "#e91e63")   # M1 cyan, M2 pink
 
 _HIDDEN_LEGEND_ALPHA = 0.35
 
-_MARKER_HINT = (
+_POINT_MARKER_KW = dict(marker="o", markersize=3.0, markeredgewidth=0.0)
+
+_HINT_TEXT = (
     "Left-click on a plot to place a marker (cycles M1 ↔ M2). "
     "Right-click clears the markers in that group. "
     "Scroll = zoom X.  Middle-drag (or Shift+left-drag) = pan X."
@@ -142,6 +163,13 @@ def _format_value(label: str, unit: str, values: list[float], idx: int) -> str:
     return f"{label}={int(round(v)):+6d}"
 
 
+def _wrap_columns(items: list[str], per_line: int, indent: str) -> list[str]:
+    out: list[str] = []
+    for i in range(0, len(items), per_line):
+        out.append(indent + "   ".join(items[i:i + per_line]))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Y-axis control strip
 # ---------------------------------------------------------------------------
@@ -149,6 +177,8 @@ def _format_value(label: str, unit: str, values: list[float], idx: int) -> str:
 class _YControls(QWidget):
     """Compact Y-axis editor placed left of its plot.
 
+    Carries a bold section title ("Voltage scale" / "Current scale" / "ADC
+    scale") so the user can immediately see which plot each strip belongs to.
     Emits `apply_requested(ymin, ymax)` on Apply Y and `auto_requested()` on
     Auto Y. The host widget calls `update_fields(ymin, ymax)` after autoscale
     so the spinboxes reflect the actual view.
@@ -157,43 +187,66 @@ class _YControls(QWidget):
     apply_requested = Signal(float, float)
     auto_requested  = Signal()
 
-    def __init__(self, unit: str, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, *, title: str, unit: str, parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         v = QVBoxLayout(self)
-        v.setContentsMargins(4, 4, 4, 4)
+        v.setContentsMargins(4, 2, 4, 2)
         v.setSpacing(2)
 
-        # The order of (Y max, Y min) matches the screen — top of plot at top.
+        head = QLabel(title)
+        head.setStyleSheet("font-weight: 600;")
+        head.setAlignment(Qt.AlignHCenter)
+        v.addWidget(head)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        v.addWidget(sep)
+
+        self._unit = unit
         self._ymax = self._make_spin()
         self._ymin = self._make_spin()
 
-        unit_suffix = f" ({unit})" if unit else ""
+        # Top of plot at top of strip.
         v.addStretch(1)
-        v.addWidget(QLabel(f"Y max{unit_suffix}"))
-        v.addWidget(self._ymax)
-        v.addWidget(QLabel(f"Y min{unit_suffix}"))
-        v.addWidget(self._ymin)
+        v.addWidget(self._field_row("max", self._ymax))
+        v.addWidget(self._field_row("min", self._ymin))
 
-        btn_apply = QPushButton("Apply Y")
-        btn_auto  = QPushButton("Auto Y")
+        btn_apply = QPushButton("Apply")
+        btn_auto  = QPushButton("Auto")
         btn_apply.clicked.connect(self._on_apply)
         btn_auto.clicked.connect(self.auto_requested)
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(2)
         btn_row.addWidget(btn_apply)
         btn_row.addWidget(btn_auto)
         v.addLayout(btn_row)
         v.addStretch(1)
 
-        self.setMinimumWidth(140)
-        self.setMaximumWidth(170)
+        self.setMinimumWidth(112)
+        self.setMaximumWidth(132)
 
-    @staticmethod
-    def _make_spin() -> QDoubleSpinBox:
+    def _field_row(self, label: str, spin: QDoubleSpinBox) -> QWidget:
+        w = QWidget(self)
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(3)
+        lbl = QLabel(label)
+        lbl.setMinimumWidth(24)
+        h.addWidget(lbl)
+        h.addWidget(spin, stretch=1)
+        return w
+
+    def _make_spin(self) -> QDoubleSpinBox:
         s = QDoubleSpinBox()
         s.setRange(-1e9, 1e9)
         s.setDecimals(2)
         s.setSingleStep(1.0)
+        if self._unit:
+            s.setSuffix(f" {self._unit}")
         return s
 
     def update_fields(self, ymin: float, ymax: float) -> None:
@@ -211,32 +264,28 @@ class _YControls(QWidget):
 # ---------------------------------------------------------------------------
 
 class _PlotRow(QWidget):
-    """Self-contained plot widget with its own Figure, Canvas and Y controls.
-
-    The dialog wires three of these together: V, I, ADC. X-axes are synced
-    by listening to `xlim_changed_by_user` and pushing the new range to the
-    other rows via `set_xlim_quiet` (which suppresses the round-trip).
-    """
+    """Self-contained plot widget with its own Figure, Canvas and Y controls."""
 
     xlim_changed_by_user = Signal(float, float)
     clicked              = Signal(int, float)   # button (1=left, 3=right), xdata
-    cursor_moved         = Signal(float)        # xdata under mouse
+    cursor_moved         = Signal(float)        # raw xdata under mouse
     cursor_left          = Signal()
 
     def __init__(
         self,
         *,
-        title:    str,
-        ylabel:   str,
-        unit:     str,
-        series:   list[tuple[str, str, list[float]]],   # (label, color, values)
-        times:    list[float],
-        style:    dict,
-        parent:   Optional[QWidget] = None,
+        title:           str,
+        ylabel:          str,
+        unit:            str,
+        section_title:   str,
+        series:          list[tuple[str, str, list[float]]],
+        times:           list[float],
+        style:           dict,
+        parent:          Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.times    = times
-        self.series   = series   # parallel list (label, color, values)
+        self.series   = series
         self._unit    = unit
         self._title   = title
         self._lines:           list[Line2D] = []
@@ -245,6 +294,8 @@ class _PlotRow(QWidget):
         self._trigger_line:    Optional[Line2D] = None
         self._trigger_band              = None
         self._trigger_label             = None
+        self._view_label                = None
+        self._cursor_line: Optional[Line2D] = None
         self._suppress_next_click       = False
         self._pan_origin: Optional[tuple[float, float, float]] = None  # (px, xmin0, xmax0)
 
@@ -252,15 +303,14 @@ class _PlotRow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        self.y_controls = _YControls(unit, self)
+        self.y_controls = _YControls(title=section_title, unit=unit, parent=self)
         self.y_controls.apply_requested.connect(self._on_apply_y)
         self.y_controls.auto_requested.connect(self.auto_y)
         layout.addWidget(self.y_controls)
 
         self._fig = Figure()
-        # Reserve space on the right for the outside legend; on the bottom for
-        # an x-label so the trigger band doesn't get clipped by the spine.
-        self._fig.subplots_adjust(left=0.07, right=0.84, top=0.90, bottom=0.18)
+        # Reserve space on the right for the outside legend.
+        self._fig.subplots_adjust(left=0.06, right=0.84, top=0.90, bottom=0.18)
         self._canvas = FigureCanvasQTAgg(self._fig)
         self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._ax: Axes = self._fig.add_subplot(111)
@@ -366,18 +416,14 @@ class _PlotRow(QWidget):
     # ---------------- Trigger overlay ----------------
 
     def _refresh_trigger_overlay(self) -> None:
-        if self._trigger_band is not None:
-            try:
-                self._trigger_band.remove()
-            except (ValueError, AttributeError):
-                pass
-            self._trigger_band = None
-        if self._trigger_label is not None:
-            try:
-                self._trigger_label.remove()
-            except (ValueError, AttributeError):
-                pass
-            self._trigger_label = None
+        for attr in ("_trigger_band", "_trigger_label", "_view_label"):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                try:
+                    obj.remove()
+                except (ValueError, AttributeError):
+                    pass
+                setattr(self, attr, None)
 
         self._trigger_band = self._ax.axvspan(
             -_TRIGGER_BAND_HALFWIDTH_MS, _TRIGGER_BAND_HALFWIDTH_MS,
@@ -385,8 +431,53 @@ class _PlotRow(QWidget):
         )
         ymin, ymax = self._ax.get_ylim()
         self._trigger_label = self._ax.text(
-            0, ymax - (ymax - ymin) * 0.04, "TRIGGER", **_TRIGGER_LABEL_KW,
+            0, ymax - (ymax - ymin) * 0.04,
+            "TRIGGER  t = 0.0 ms",
+            **_TRIGGER_LABEL_KW,
         )
+        xmin, xmax = self._ax.get_xlim()
+        span_ms   = xmax - xmin
+        half_ms   = span_ms / 2.0
+        # Show window relative to trigger when zero is roughly centered, else
+        # show plain min…max — same data, more useful framing for the user.
+        if abs(xmin + xmax) < 0.05 * (abs(xmin) + abs(xmax) + 1.0):
+            text = f"view: ±{half_ms:.1f} ms  ({span_ms:.1f} ms span)"
+        else:
+            text = f"view: {xmin:+.1f} … {xmax:+.1f} ms  ({span_ms:.1f} ms)"
+        self._view_label = self._ax.text(
+            0.995, 0.965, text,
+            transform=self._ax.transAxes, **_VIEW_LABEL_KW,
+        )
+
+    # ---------------- Cursor (synchronised vertical line) ----------------
+
+    def set_cursor_x(self, x: Optional[float]) -> None:
+        if x is None:
+            if self._cursor_line is not None:
+                try:
+                    self._cursor_line.remove()
+                except (ValueError, AttributeError):
+                    pass
+                self._cursor_line = None
+                self._canvas.draw_idle()
+            return
+        if self._cursor_line is None:
+            self._cursor_line = self._ax.axvline(x, **_CURSOR_LINE_STYLE)
+        else:
+            self._cursor_line.set_xdata([x, x])
+        self._canvas.draw_idle()
+
+    # ---------------- Point markers ----------------
+
+    def set_point_markers(self, on: bool) -> None:
+        for line in self._lines:
+            if on:
+                line.set_marker(_POINT_MARKER_KW["marker"])
+                line.set_markersize(_POINT_MARKER_KW["markersize"])
+                line.set_markeredgewidth(_POINT_MARKER_KW["markeredgewidth"])
+            else:
+                line.set_marker("")
+        self._canvas.draw_idle()
 
     # ---------------- Mouse: click / pick / pan / scroll ----------------
 
@@ -504,16 +595,12 @@ class _PlotRow(QWidget):
 
 @dataclass
 class _MarkerGroup:
-    """Two-cursor marker state for a set of plot rows that share a time axis.
-
-    Each placed marker draws an axvline on every row in `rows`. `series` is
-    the joint set of (label, unit, values) used for the readout — values are
-    indexed by the snapped sample index.
-    """
+    """Two-cursor marker state for a set of plot rows that share a time axis."""
     name:    str
     rows:    list[_PlotRow]
     times:   list[float]
     series:  list[tuple[str, str, list[float]]] = field(default_factory=list)
+    columns_per_line: int = 4
     xs:        list[float]                       = field(default_factory=list)
     indices:   list[int]                         = field(default_factory=list)
     line_sets: list[list[tuple[_PlotRow, Line2D]]] = field(default_factory=list)
@@ -533,6 +620,8 @@ class CaptureViewDialog(QDialog):
         self.resize(int(screen.width() * 0.9), int(screen.height() * 0.9))
 
         self._x_sync_in_progress = False
+        self._sync_cursor_on     = True
+        self._point_markers_on   = False
 
         self._build_data(session)
         self._setup_ui()
@@ -587,17 +676,20 @@ class CaptureViewDialog(QDialog):
 
         self._row_v = _PlotRow(
             title="ADE9000 voltages", ylabel="Voltage", unit="V",
+            section_title="Voltage scale",
             series=self._volt_series, times=self._t_ade,
             style=_PRIMARY_STYLE, parent=self,
         )
         self._row_i = _PlotRow(
             title="ADE9000 currents", ylabel="Current", unit="A",
+            section_title="Current scale",
             series=self._curr_series, times=self._t_ade,
             style=_PRIMARY_STYLE, parent=self,
         )
         self._row_d = _PlotRow(
             title=f"Distribution ADC  ({self._session_meta})",
             ylabel="ADC", unit="raw int16",
+            section_title="ADC scale",
             series=self._dist_series, times=self._t_dist,
             style=_SECONDARY_STYLE, parent=self,
         )
@@ -609,10 +701,7 @@ class CaptureViewDialog(QDialog):
         main.addWidget(self._build_x_bar())
         main.addWidget(self._build_status_panel())
 
-        # Marker groups straddle rows. ADE9000 group spans both V and I; its
-        # readout series carry units (V / A) so the formatter knows how to
-        # display them. Distribution channels are unitless raw int16 — empty
-        # unit string switches the formatter to integer output.
+        # Marker groups straddle rows.
         ade_marker_series = (
             [(label, "V", values) for label, _color, values in self._volt_series]
             + [(label, "A", values) for label, _color, values in self._curr_series]
@@ -626,23 +715,36 @@ class CaptureViewDialog(QDialog):
                 rows=[self._row_v, self._row_i],
                 times=self._t_ade,
                 series=ade_marker_series,
+                columns_per_line=3,
             ),
             _MarkerGroup(
                 name="Distribution",
                 rows=[self._row_d],
                 times=self._t_dist,
                 series=dist_marker_series,
+                columns_per_line=4,
             ),
         ]
+
+    # ---- Top bar (split into two rows) ----
 
     def _build_top_bar(self) -> QWidget:
         bar = QFrame()
         bar.setFrameShape(QFrame.Shape.StyledPanel)
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(6, 4, 6, 4)
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(6, 4, 6, 4)
+        v.setSpacing(3)
+        v.addLayout(self._build_focus_row())
+        v.addLayout(self._build_channels_row())
+        return bar
+
+    def _build_focus_row(self) -> QHBoxLayout:
+        h = QHBoxLayout()
         h.setSpacing(6)
 
-        h.addWidget(QLabel("Focus:"))
+        head = QLabel("Focus:")
+        head.setStyleSheet("font-weight: 600;")
+        h.addWidget(head)
         self._focus_btns = QButtonGroup(self)
         self._focus_btns.setExclusive(True)
         for i, name in enumerate(("All", "V", "I", "ADC")):
@@ -656,7 +758,35 @@ class CaptureViewDialog(QDialog):
         self._focus_btns.idClicked.connect(self._on_focus_changed)
 
         h.addSpacing(16)
-        h.addWidget(QLabel("ADC channels:"))
+        self._sync_cursor_cb = QCheckBox("Sync cursor")
+        self._sync_cursor_cb.setChecked(self._sync_cursor_on)
+        self._sync_cursor_cb.setToolTip(
+            "Show a synchronized vertical cursor on every plot at the mouse X")
+        self._sync_cursor_cb.toggled.connect(self._on_sync_cursor_toggled)
+        h.addWidget(self._sync_cursor_cb)
+
+        self._point_markers_cb = QCheckBox("Point markers")
+        self._point_markers_cb.setChecked(self._point_markers_on)
+        self._point_markers_cb.setToolTip(
+            "Highlight every sample as a small dot on every line")
+        self._point_markers_cb.toggled.connect(self._on_point_markers_toggled)
+        h.addWidget(self._point_markers_cb)
+
+        h.addStretch(1)
+
+        self._reset_btn = QPushButton("Reset View")
+        self._reset_btn.setToolTip("Auto-scale X and Y on every plot")
+        self._reset_btn.clicked.connect(self._on_reset_view)
+        h.addWidget(self._reset_btn)
+        return h
+
+    def _build_channels_row(self) -> QHBoxLayout:
+        h = QHBoxLayout()
+        h.setSpacing(4)
+
+        head = QLabel("ADC channels:")
+        head.setStyleSheet("font-weight: 600;")
+        h.addWidget(head)
         self._ch_checks: dict[str, QCheckBox] = {}
         for key in CHANNEL_KEYS:
             cb = QCheckBox(key)
@@ -667,6 +797,7 @@ class CaptureViewDialog(QDialog):
             self._ch_checks[key] = cb
             h.addWidget(cb)
 
+        h.addSpacing(8)
         for label, fn in (
             ("All",  self._adc_preset_all),
             ("u17",  self._adc_preset_u17),
@@ -679,26 +810,33 @@ class CaptureViewDialog(QDialog):
             h.addWidget(btn)
 
         h.addStretch(1)
+        return h
 
-        self._reset_btn = QPushButton("Reset View")
-        self._reset_btn.setToolTip("Auto-scale X and Y on every plot")
-        self._reset_btn.clicked.connect(self._on_reset_view)
-        h.addWidget(self._reset_btn)
-
-        return bar
+    # ---- X bar (split into time-range + trigger rows) ----
 
     def _build_x_bar(self) -> QWidget:
         bar = QFrame()
         bar.setFrameShape(QFrame.Shape.StyledPanel)
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(6, 4, 6, 4)
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(6, 4, 6, 4)
+        v.setSpacing(3)
+        v.addLayout(self._build_time_range_row())
+        v.addLayout(self._build_trigger_row())
+        return bar
+
+    def _build_time_range_row(self) -> QHBoxLayout:
+        h = QHBoxLayout()
         h.setSpacing(6)
 
-        h.addWidget(QLabel("Time range:"))
-        h.addWidget(QLabel("X min (ms)"))
+        head = QLabel("Time range:")
+        head.setStyleSheet("font-weight: 600;")
+        head.setMinimumWidth(90)
+        h.addWidget(head)
+
+        h.addWidget(QLabel("X min"))
         self._xmin_spin = self._make_x_spin()
         h.addWidget(self._xmin_spin)
-        h.addWidget(QLabel("X max (ms)"))
+        h.addWidget(QLabel("X max"))
         self._xmax_spin = self._make_x_spin()
         h.addWidget(self._xmax_spin)
 
@@ -708,22 +846,32 @@ class CaptureViewDialog(QDialog):
         btn_auto = QPushButton("Auto X")
         btn_auto.clicked.connect(self._on_auto_x)
         h.addWidget(btn_auto)
+        h.addStretch(1)
+        return h
 
-        h.addSpacing(12)
-        h.addWidget(QLabel("Trigger ±"))
+    def _build_trigger_row(self) -> QHBoxLayout:
+        h = QHBoxLayout()
+        h.setSpacing(6)
+
+        head = QLabel("Trigger:")
+        head.setStyleSheet("font-weight: 600;")
+        head.setMinimumWidth(90)
+        h.addWidget(head)
+
+        h.addWidget(QLabel("± half-window"))
         self._trig_window_spin = QDoubleSpinBox()
         self._trig_window_spin.setRange(0.5, 100000.0)
         self._trig_window_spin.setDecimals(1)
         self._trig_window_spin.setValue(50.0)
         self._trig_window_spin.setSuffix(" ms")
         h.addWidget(self._trig_window_spin)
-        btn_trig = QPushButton("Trigger ± window")
+
+        btn_trig = QPushButton("Centre on trigger")
         btn_trig.setToolTip("Centre X on the trigger with the given half-width")
         btn_trig.clicked.connect(self._on_trigger_window)
         h.addWidget(btn_trig)
-
         h.addStretch(1)
-        return bar
+        return h
 
     @staticmethod
     def _make_x_spin() -> QDoubleSpinBox:
@@ -731,7 +879,10 @@ class CaptureViewDialog(QDialog):
         s.setRange(-1e9, 1e9)
         s.setDecimals(2)
         s.setSingleStep(10.0)
+        s.setSuffix(" ms")
         return s
+
+    # ---- Status panel (cursor + markers, structured) ----
 
     def _build_status_panel(self) -> QWidget:
         box = QFrame()
@@ -739,15 +890,28 @@ class CaptureViewDialog(QDialog):
         v = QVBoxLayout(box)
         v.setContentsMargins(6, 4, 6, 4)
         v.setSpacing(2)
-        self._cursor_lbl = QLabel("Cursor: —")
-        self._cursor_lbl.setStyleSheet("font-family: monospace;")
+
+        cursor_head = QLabel("Cursor")
+        cursor_head.setStyleSheet("font-weight: 600;")
+        v.addWidget(cursor_head)
+        self._cursor_lbl = QLabel("  —")
+        self._cursor_lbl.setStyleSheet(
+            "font-family: 'Consolas','Cascadia Mono',monospace; "
+            "color: #222;"
+        )
         self._cursor_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._cursor_lbl.setWordWrap(True)
-        self._marker_lbl = QLabel(_MARKER_HINT)
-        self._marker_lbl.setStyleSheet("font-family: monospace;")
+        self._cursor_lbl.setWordWrap(False)
+        v.addWidget(self._cursor_lbl)
+
+        markers_head = QLabel("Markers")
+        markers_head.setStyleSheet("font-weight: 600;")
+        v.addWidget(markers_head)
+        self._marker_lbl = QLabel("  " + _HINT_TEXT)
+        self._marker_lbl.setStyleSheet(
+            "font-family: 'Consolas','Cascadia Mono',monospace; color: #222;"
+        )
         self._marker_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._marker_lbl.setWordWrap(True)
-        v.addWidget(self._cursor_lbl)
         v.addWidget(self._marker_lbl)
         return box
 
@@ -833,6 +997,19 @@ class CaptureViewDialog(QDialog):
         self._row_i.setVisible(idx in (0, 2))
         self._row_d.setVisible(idx in (0, 3))
 
+    # ---------------- Global toggles ----------------
+
+    def _on_sync_cursor_toggled(self, on: bool) -> None:
+        self._sync_cursor_on = on
+        if not on:
+            for row in self._all_rows():
+                row.set_cursor_x(None)
+
+    def _on_point_markers_toggled(self, on: bool) -> None:
+        self._point_markers_on = on
+        for row in self._all_rows():
+            row.set_point_markers(on)
+
     # ---------------- ADC channel filter presets ----------------
 
     def _adc_preset(self, mask: dict[str, bool]) -> None:
@@ -907,38 +1084,46 @@ class CaptureViewDialog(QDialog):
                 continue
             any_markers = True
             for k, (x, idx) in enumerate(zip(g.xs, g.indices)):
-                parts = [_format_value(label, unit, values, idx)
-                         for (label, unit, values) in g.series]
-                out_lines.append(
-                    f"{g.name} M{k + 1}: t={x:+9.2f} ms"
-                    + ("  " + "  ".join(parts) if parts else "")
+                head = f"  {g.name:<13}M{k + 1}   t = {x:+9.2f} ms"
+                out_lines.append(head)
+                vals = [_format_value(label, unit, values, idx)
+                        for (label, unit, values) in g.series]
+                out_lines.extend(
+                    _wrap_columns(vals, g.columns_per_line, " " * 23)
                 )
             if len(g.xs) == 2:
+                dt = g.xs[1] - g.xs[0]
                 out_lines.append(
-                    f"{g.name} Δt={g.xs[1] - g.xs[0]:+9.2f} ms"
+                    f"  {g.name:<13}Δt   = {dt:+9.2f} ms"
                 )
-        self._marker_lbl.setText(
-            "\n".join(out_lines) if any_markers else _MARKER_HINT
-        )
+            out_lines.append("")
+        text = "\n".join(out_lines).rstrip() if any_markers else "  " + _HINT_TEXT
+        self._marker_lbl.setText(text)
 
     # ---------------- Cursor live readout ----------------
 
     def _on_cursor_moved(self, x: float) -> None:
-        segments: list[str] = []
+        out_lines: list[str] = []
         for g in self._mgroups:
             if not g.times:
                 continue
             idx = _snap_index(g.times, x)
             t_snapped = g.times[idx]
-            parts = [_format_value(label, unit, values, idx)
-                     for (label, unit, values) in g.series]
-            if parts:
-                segments.append(
-                    f"{g.name} t={t_snapped:+8.2f} ms  " + "  ".join(parts)
-                )
+            head = f"  {g.name:<13} t = {t_snapped:+9.2f} ms"
+            out_lines.append(head)
+            vals = [_format_value(label, unit, values, idx)
+                    for (label, unit, values) in g.series]
+            out_lines.extend(
+                _wrap_columns(vals, g.columns_per_line, " " * 17)
+            )
         self._cursor_lbl.setText(
-            "Cursor: " + (" | ".join(segments) if segments else "—")
+            "\n".join(out_lines) if out_lines else "  —"
         )
+        if self._sync_cursor_on:
+            for row in self._all_rows():
+                row.set_cursor_x(x)
 
     def _on_cursor_left(self) -> None:
-        self._cursor_lbl.setText("Cursor: —")
+        self._cursor_lbl.setText("  —")
+        for row in self._all_rows():
+            row.set_cursor_x(None)
