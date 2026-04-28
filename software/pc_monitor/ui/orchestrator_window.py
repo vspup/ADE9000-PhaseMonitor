@@ -37,6 +37,7 @@ from core.distribution_client import DistributionClient
 from core.orchestrator import CaptureSession, OrchestratorConfig
 from core.orchestrator_worker import OrchestratorWorker
 from core.port_scanner import ScanResult, scan_ports
+from ui.capture_viewer import CaptureViewDialog
 
 # Colour tokens
 _GREEN = "#4caf50"
@@ -70,9 +71,10 @@ class OrchestratorWindow(QMainWindow):
         self.setWindowTitle("MPS2P Orchestrator")
         self.resize(740, 680)
 
-        self._worker:      Optional[OrchestratorWorker] = None
-        self._scan_worker: Optional[_ScanWorker]        = None
-        self._scan_result: Optional[ScanResult]         = None
+        self._worker:       Optional[OrchestratorWorker] = None
+        self._scan_worker:  Optional[_ScanWorker]        = None
+        self._scan_result:  Optional[ScanResult]         = None
+        self._last_session: Optional[CaptureSession]     = None
 
         self._setup_ui()
         self._populate_all_ports()
@@ -235,6 +237,13 @@ class OrchestratorWindow(QMainWindow):
         )
         vl.addWidget(self._result_dir)
         vl.addWidget(self._result_metrics)
+
+        self._view_btn = QPushButton("View Plots")
+        self._view_btn.setFixedHeight(32)
+        self._view_btn.setToolTip("Open voltage / current / ADC charts for this session")
+        self._view_btn.clicked.connect(self._on_view_session)
+        vl.addWidget(self._view_btn)
+
         return self._result_box
 
     # ------------------------------------------------------------------
@@ -364,6 +373,7 @@ class OrchestratorWindow(QMainWindow):
 
     @Slot(object)
     def _on_done(self, session: CaptureSession) -> None:
+        self._last_session = session
         done = session.arduino_done
         ds   = session.dist_status
         out  = Path(session.config.output_dir) / session.session_id
@@ -380,6 +390,13 @@ class OrchestratorWindow(QMainWindow):
         self._log.appendPlainText("[DONE] session written")
         self._run_btn.setEnabled(True)
         self._scan_btn.setEnabled(True)
+
+    @Slot()
+    def _on_view_session(self) -> None:
+        if self._last_session is None:
+            return
+        dlg = CaptureViewDialog(self._last_session, parent=self)
+        dlg.show()
 
     @Slot(str)
     def _on_failed(self, msg: str) -> None:
