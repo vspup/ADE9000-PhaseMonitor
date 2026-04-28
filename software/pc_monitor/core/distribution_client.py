@@ -300,16 +300,31 @@ class DistributionClient:
         if "MODE CMD OK" not in reply.upper():
             raise DistributionError(f"MODE CMD failed: {reply!r}")
 
-    def ping(self, timeout: float = 1.0) -> float:
-        """Send PING; return round-trip time in ms."""
+    def ping(self, timeout: float = 2.0) -> float:
+        """Send PING; return round-trip time in ms.
+
+        Scans until PONG is found, skipping garbled lines that can appear
+        during RS-485 TX→RX adapter switching (half-duplex settling artefact).
+        """
         self._drain()
         t0 = time.perf_counter_ns()
         self._t.send_line(DistributionProtocol.CMD_PING)
-        reply = self._recv(timeout)
-        rtt_ms = (time.perf_counter_ns() - t0) / 1e6
-        if "PONG" not in reply.upper():
-            raise DistributionError(f"unexpected PING reply: {reply!r}")
-        return rtt_ms
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DistributionTimeout(f"PING: no PONG after {timeout:.1f}s")
+            try:
+                line = self._t.rx_queue.get(timeout=min(remaining, 0.1))
+            except queue.Empty:
+                continue
+            upper = line.upper()
+            if DistributionProtocol.parse_evt(line) is not None:
+                self._evt_lines.append(line)
+                continue
+            if "PONG" in upper:
+                return (time.perf_counter_ns() - t0) / 1e6
+            # Garbled / echo line — keep scanning until PONG or timeout.
 
     def ping_probe(self, n: int = 25, timeout: float = 1.0) -> float:
         """Send N PING probes; return median RTT in ms."""
