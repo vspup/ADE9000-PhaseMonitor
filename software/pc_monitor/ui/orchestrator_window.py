@@ -3,7 +3,7 @@
 Runs Orchestrator + session_writer via OrchestratorWorker (background QThread).
 
 Layout:
-  Configuration panel  — port selectors, pre/post, trigger mode
+  Configuration panel  — port selectors with Scan button, pre/post, trigger mode
   Run button
   Progress log         — forwarded from Orchestrator.on_progress
   Result panel         — session dir + key metrics (visible after done)
@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import serial.tools.list_ports
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import QThread, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
@@ -37,15 +37,37 @@ from core.ade9000_client import Ade9000Client
 from core.distribution_client import DistributionClient
 from core.orchestrator import CaptureSession, OrchestratorConfig
 from core.orchestrator_worker import OrchestratorWorker
+from core.port_scanner import ScanResult, scan_ports
 
+
+# ---------------------------------------------------------------------------
+# Background scanner thread
+# ---------------------------------------------------------------------------
+
+class _ScanWorker(QThread):
+    finished = Signal(object)   # ScanResult
+
+    def __init__(self, timeout: float, parent=None) -> None:
+        super().__init__(parent)
+        self._timeout = timeout
+
+    def run(self) -> None:
+        result = scan_ports(timeout=self._timeout)
+        self.finished.emit(result)
+
+
+# ---------------------------------------------------------------------------
+# Main window
+# ---------------------------------------------------------------------------
 
 class OrchestratorWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("MPS2P Orchestrator")
-        self.resize(720, 640)
+        self.resize(720, 660)
 
-        self._worker: Optional[OrchestratorWorker] = None
+        self._worker:      Optional[OrchestratorWorker] = None
+        self._scan_worker: Optional[_ScanWorker]        = None
         self._setup_ui()
         self._refresh_ports()
 
@@ -75,21 +97,27 @@ class OrchestratorWindow(QMainWindow):
         form = QFormLayout(box)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
-        # Arduino port
+        # Arduino port + Scan button (shared)
         row_ard = QHBoxLayout()
         self._ard_port = QComboBox()
         self._ard_port.setMinimumWidth(150)
-        self._ard_refresh = QPushButton("Refresh")
-        self._ard_refresh.clicked.connect(self._refresh_ports)
+        self._scan_btn = QPushButton("Scan")
+        self._scan_btn.setToolTip("Auto-detect ADE9000 and Distribution ports")
+        self._scan_btn.clicked.connect(self._on_scan)
+        self._scan_status = QLabel("")
         row_ard.addWidget(self._ard_port, 1)
-        row_ard.addWidget(self._ard_refresh)
+        row_ard.addWidget(self._scan_btn)
+        row_ard.addWidget(self._scan_status)
         form.addRow("Arduino port:", row_ard)
 
-        # Distribution port
+        # Distribution port + Refresh (list only)
         row_dist = QHBoxLayout()
         self._dist_port = QComboBox()
         self._dist_port.setMinimumWidth(150)
+        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn.clicked.connect(self._refresh_ports)
         row_dist.addWidget(self._dist_port, 1)
+        row_dist.addWidget(self._refresh_btn)
         form.addRow("Distribution port:", row_dist)
 
         # Pre / Post
@@ -172,6 +200,39 @@ class OrchestratorWindow(QMainWindow):
                 combo.setCurrentText(current)
 
     @Slot()
+    def _on_scan(self) -> None:
+        self._scan_btn.setEnabled(False)
+        self._refresh_btn.setEnabled(False)
+        self._run_btn.setEnabled(False)
+        self._scan_status.setText("Scanning...")
+
+        self._scan_worker = _ScanWorker(timeout=0.5, parent=self)
+        self._scan_worker.finished.connect(self._on_scan_done)
+        self._scan_worker.start()
+
+    @Slot(object)
+    def _on_scan_done(self, result: ScanResult) -> None:
+        self._scan_btn.setEnabled(True)
+        self._refresh_btn.setEnabled(True)
+        self._run_btn.setEnabled(True)
+
+        # Repopulate lists with current ports
+        self._refresh_ports()
+
+        found = []
+        if result.arduino_port:
+            self._ard_port.setCurrentText(result.arduino_port)
+            found.append(f"ADE9000={result.arduino_port}")
+        if result.dist_port:
+            self._dist_port.setCurrentText(result.dist_port)
+            found.append(f"Dist={result.dist_port}")
+
+        if found:
+            self._scan_status.setText("  ".join(found))
+        else:
+            self._scan_status.setText("Nothing found")
+
+    @Slot()
     def _on_run(self) -> None:
         ard_port  = self._ard_port.currentText()
         dist_port = self._dist_port.currentText()
@@ -186,6 +247,7 @@ class OrchestratorWindow(QMainWindow):
             return
 
         self._run_btn.setEnabled(False)
+        self._scan_btn.setEnabled(False)
         self._log.clear()
         self._result_box.setVisible(False)
 
@@ -227,17 +289,20 @@ class OrchestratorWindow(QMainWindow):
         self._result_box.setVisible(True)
         self._log.appendPlainText("[DONE] session written")
         self._run_btn.setEnabled(True)
+        self._scan_btn.setEnabled(True)
 
     @Slot(str)
     def _on_failed(self, msg: str) -> None:
         self._log.appendPlainText(f"[ERROR] {msg}")
         self._run_btn.setEnabled(True)
+        self._scan_btn.setEnabled(True)
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:
-        if self._worker and self._worker.isRunning():
-            self._worker.wait(3000)
+        for w in (self._worker, self._scan_worker):
+            if w and w.isRunning():
+                w.wait(3000)
         super().closeEvent(event)
