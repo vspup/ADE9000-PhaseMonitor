@@ -38,7 +38,9 @@ from core.distribution_client import DistributionClient
 from core.orchestrator import CaptureSession, OrchestratorConfig
 from core.orchestrator_worker import OrchestratorWorker
 from core.port_scanner import ScanResult, scan_ports
+from core.session_reader import SessionReadError, read_session
 from ui.capture_viewer import CaptureViewDialog
+from ui.session_browser import SessionBrowserDialog
 
 # Colour tokens
 _GREEN = "#4caf50"
@@ -69,6 +71,40 @@ class _ScanWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
+# Distribution reset thread
+# ---------------------------------------------------------------------------
+
+class _ResetWorker(QThread):
+    """Re-arm Distribution out-of-band so its FSM goes back to IDLE/ARMED.
+
+    Distribution FW has no CAP ABORT; an explicit ARM is the documented
+    way to reset the capture FSM (see orchestrator._abort_both). Runs in a
+    QThread because RS-485 timeouts can stall for several seconds when
+    the link is genuinely down.
+    """
+
+    finished = Signal(bool, str)   # (ok, message)
+
+    def __init__(self, port: str, baudrate: int = 57600, parent=None) -> None:
+        super().__init__(parent)
+        self._port     = port
+        self._baudrate = baudrate
+
+    def run(self) -> None:
+        client = DistributionClient()
+        try:
+            client.open(self._port, self._baudrate)
+            try:
+                client.mode_cmd()
+                client.arm()
+            finally:
+                client.close()
+            self.finished.emit(True, "Distribution re-armed (FSM → IDLE → ARMED)")
+        except Exception as exc:
+            self.finished.emit(False, str(exc))
+
+
+# ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
 
@@ -80,6 +116,7 @@ class OrchestratorWindow(QMainWindow):
 
         self._worker:       Optional[OrchestratorWorker] = None
         self._scan_worker:  Optional[_ScanWorker]        = None
+        self._reset_worker: Optional[_ResetWorker]       = None
         self._scan_result:  Optional[ScanResult]         = None
         self._last_session: Optional[CaptureSession]     = None
 
@@ -107,11 +144,21 @@ class OrchestratorWindow(QMainWindow):
         vbox.addWidget(self._build_devices_group())
         vbox.addWidget(self._build_settings_group())
 
+        run_row = QHBoxLayout()
         self._run_btn = QPushButton("Run Capture")
         self._run_btn.setFixedHeight(38)
         self._run_btn.setToolTip("Start the startup-capture sequence on both devices")
         self._run_btn.clicked.connect(self._on_run)
-        vbox.addWidget(self._run_btn)
+        run_row.addWidget(self._run_btn, 1)
+
+        self._browse_btn = QPushButton("Browse Sessions…")
+        self._browse_btn.setFixedHeight(38)
+        self._browse_btn.setToolTip(
+            "Open the analysis viewer on a previously captured session"
+        )
+        self._browse_btn.clicked.connect(self._on_browse_sessions)
+        run_row.addWidget(self._browse_btn)
+        vbox.addLayout(run_row)
 
         vbox.addWidget(self._build_progress_group())
         vbox.addWidget(self._build_error_panel())
@@ -266,6 +313,20 @@ class OrchestratorWindow(QMainWindow):
         )
         vl.addWidget(self._error_title)
         vl.addWidget(self._error_detail)
+
+        # After a FIRE/DRAIN failure the Distribution FSM is stuck in
+        # ARMED/CAPTURING (no CAP ABORT in FW yet). Re-ARM resets it to
+        # IDLE so the user can hit Run again without a USB reconnect.
+        reset_row = QHBoxLayout()
+        reset_row.setContentsMargins(0, 4, 0, 0)
+        self._reset_btn = QPushButton("Reset Distribution")
+        self._reset_btn.setToolTip(
+            "Re-ARM Distribution to clear a stuck FSM after a failed capture"
+        )
+        self._reset_btn.clicked.connect(self._on_reset_distribution)
+        reset_row.addStretch()
+        reset_row.addWidget(self._reset_btn)
+        vl.addLayout(reset_row)
         return self._error_box
 
     # --- Result group ---
@@ -492,6 +553,59 @@ class OrchestratorWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    @Slot()
+    def _on_browse_sessions(self) -> None:
+        # Default location matches OrchestratorConfig.output_dir (CWD-relative).
+        captures_dir = Path("captures")
+        dlg = SessionBrowserDialog(captures_dir, parent=self)
+        dlg.selected.connect(self._open_session_from_disk)
+        dlg.exec()
+
+    @Slot(Path)
+    def _open_session_from_disk(self, session_dir: Path) -> None:
+        try:
+            sess = read_session(session_dir)
+        except SessionReadError as exc:
+            QMessageBox.warning(
+                self,
+                "Cannot open session",
+                f"{session_dir}\n\n{exc}",
+            )
+            return
+        viewer = CaptureViewDialog(sess, parent=self)
+        viewer.finished.connect(self._on_viewer_closed)
+        self.hide()
+        viewer.showMaximized()
+
+    @Slot()
+    def _on_reset_distribution(self) -> None:
+        port = self._dist_port.currentText().strip()
+        if not port:
+            QMessageBox.warning(
+                self, "Reset Distribution",
+                "Select the Distribution COM port first.",
+            )
+            return
+        self._reset_btn.setEnabled(False)
+        self._run_btn.setEnabled(False)
+        self._log.appendPlainText(f"[RESET] re-arming Distribution on {port}")
+        self._reset_worker = _ResetWorker(port, parent=self)
+        self._reset_worker.finished.connect(self._on_reset_done)
+        self._reset_worker.start()
+
+    @Slot(bool, str)
+    def _on_reset_done(self, ok: bool, msg: str) -> None:
+        self._reset_btn.setEnabled(True)
+        self._run_btn.setEnabled(True)
+        if ok:
+            self._log.appendPlainText(f"[RESET] {msg}")
+            self._error_box.setVisible(False)
+        else:
+            self._log.appendPlainText(f"[RESET] failed: {msg}")
+            self._error_title.setText("Reset Distribution failed")
+            self._error_detail.setText(msg)
+            self._error_box.setVisible(True)
+
     @Slot(str, dict)
     def _on_failed(self, msg: str, info: dict) -> None:
         phase   = info.get("phase",   "")
@@ -527,7 +641,7 @@ class OrchestratorWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:
-        for w in (self._worker, self._scan_worker):
+        for w in (self._worker, self._scan_worker, self._reset_worker):
             if w and w.isRunning():
                 w.wait(3000)
         super().closeEvent(event)

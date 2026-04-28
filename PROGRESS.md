@@ -1,4 +1,4 @@
-# Orchestrator — progress snapshot (2026-04-28, evening)
+# Orchestrator — progress snapshot (2026-04-28, late evening)
 
 ## What is working (end-to-end verified on hardware)
 
@@ -47,6 +47,8 @@ focus modes, ADC channel filter, and click-to-place comparison markers.
 | `c6d1fb8` | feat(viewer): take-over flow — main hides, viewer maximized + [Back] [Fullscreen] [Reset] header |
 | `133e1ba` | refactor(viewer): drop mouse zoom/pan/hover — view changes only via the X/Y spinboxes |
 | `58b4f00` | fix(viewer): marker pane — invisible on dark theme + plots jumped on marker place |
+| `eba89a3` | chore: refresh PROGRESS — viewer feature inventory, 234 tests, next actions |
+| (this)    | feat: session browser (reader + dialog) + Reset Distribution recovery button |
 
 ## Commits this session (dev, mps2p-FW-db-v3)
 
@@ -58,7 +60,8 @@ focus modes, ADC channel filter, and click-to-place comparison markers.
 ## Test status
 
 ```
-234 passed   (≈10 s)
+266 passed   (≈8 s, with PySide6 deps)
+258 passed, 1 skipped   (without PySide6)
 python -m pytest tests/  from software/pc_monitor/
 ```
 
@@ -70,6 +73,7 @@ Tests by file (collected count, latest run):
 | `test_ade9000_client.py` | 36 |
 | `test_orchestrator.py` | 26 |
 | `test_session_writer.py` | 33 |
+| `test_session_reader.py` | 24 |
 | `test_orchestrator_worker.py` | 8 |
 | `test_port_scanner.py` | 35 |
 | `test_capture_parser.py` | 20 |
@@ -77,9 +81,9 @@ Tests by file (collected count, latest run):
 | `test_sync_probe.py` | 9 |
 | (others)                      | 3 |
 
-Net delta vs 04-28 snapshot: +15 tests (drain retry coverage,
-worker structured-error tests, capture-parser coverage, viewer
-sanity).
+Net delta vs 04-28 PROGRESS snapshot: +24 tests (`test_session_reader.py` —
+round-trip writer↔reader, legacy `session.json` without `trigger_idx`,
+list-sessions filtering and sorting, error paths).
 
 ## Capture viewer — feature inventory
 
@@ -133,6 +137,23 @@ all view edits go through the spinboxes.
   before failing — handles isolated RS-485 garble without aborting
   a long capture.
 - Marker pane styling neutralised — readable on light or dark Qt themes.
+- After a FIRE/DRAIN failure the error panel exposes a **Reset
+  Distribution** button. It re-arms the board out of band
+  (`MODE CMD` → `ARM`) on a private `_ResetWorker` QThread — no manual
+  USB reconnect needed before the next run.
+
+## Session browser
+
+`Browse Sessions…` button next to *Run Capture* opens
+`SessionBrowserDialog`, listing every directory under `captures/` that
+holds a valid `session.json` (newest-first by `session_id`). Selecting a
+row + *Open* loads the session via `core.session_reader.read_session()`
+and reuses the same hide/showMaximized flow as *View Plots*. The
+viewer is now reachable independently of a fresh DONE.
+
+`session.json` schema is unchanged at version 1; `trigger_idx` was added
+to the `distribution` block so the viewer can place the trigger marker
+correctly. Older files without it are still readable (defaults to 0).
 
 ## Known issues / to fix next session
 
@@ -147,13 +168,11 @@ all view edits go through the spinboxes.
 
 ## Not yet implemented
 
-- **Session browser**: no way to re-open previous sessions written
-  to `captures/`. Today the viewer is reachable only after a fresh
-  successful run.
-- **Re-run without restart**: after error on FIRE / DRAIN, the
-  Distribution board stays in ARM. Need a reset / abort flow in UI.
 - **Distribution SYNC command**: proper clock offset (currently `rtt/2`).
 - **Export from viewer**: PNG snapshot / CSV slice between markers.
+- **Distribution `CAP ABORT`** (FW-side): would let `_abort_both` cancel a
+  CAPTURING session cleanly; today the UI Reset button covers most of
+  the recovery surface but cannot interrupt an in-progress capture.
 
 ## Architecture
 
@@ -171,6 +190,10 @@ orchestrator_tool.py
         │                 ├── arduino.csv
         │                 ├── distribution.csv
         │                 └── session.json
+        ├── SessionBrowserDialog            ← Browse Sessions… (any time)
+        │     └── core.session_reader.read_session()  → CaptureViewDialog
+        ├── _ResetWorker (QThread)          ← Reset Distribution (in error panel)
+        │     └── DistributionClient: open · MODE CMD · ARM · close
         └── CaptureViewDialog                ← View Plots after DONE
               · 3 _PlotRow widgets (own Figure, Canvas, Y controls)
               · X bar (Time range + Trigger)
@@ -179,18 +202,17 @@ orchestrator_tool.py
 
 ## Next actions (priority order)
 
-1. **Session browser** — open the last N sessions from `captures/`
-   directly into `CaptureViewDialog`. Smallest path to making the
-   viewer reusable beyond a single run.
-2. **Reset / abort flow** in the orchestrator UI — explicit recovery
-   from FIRE/DRAIN failures so the Distribution board can be
-   re-armed without a manual reconnect.
-3. **Decide marker pane fate** — confirm the 150 px reserved height
+1. **Extract `_Transport`** into `core/serial_transport.py` so
+   `ade9000_client.py` and `distribution_client.py` stop carrying
+   ~70 lines of duplicate transport code each. Parameterise on
+   encoding, line terminator, and the post-open flush hack.
+2. **Distribution `SYNC <seq>`** — replace the `rtt/2` offset with a
+   real probe; coordinate with `mps2p-FW-db-v3/`.
+3. **Export from viewer** — PNG snapshot of the current view, plus a
+   CSV slice between M1/M2 if both are placed.
+4. **Decide marker pane fate** — confirm the 150 px reserved height
    feels right on a real-data run; switch to `QScrollArea` only if
    the user actually hits the clip case.
-4. **Extract `_Transport`** into `core/serial_transport.py` so the
-   two device clients stop carrying duplicate code.
-5. **Distribution `SYNC <seq>`** — replace the `rtt/2` offset with a
-   real probe; coordinate with `mps2p-FW-db-v3/`.
-6. **Export from viewer** — PNG snapshot of the current view, plus a
-   CSV slice between M1/M2 if both are placed.
+
+Done in this session: session browser (1), Reset Distribution
+recovery flow (2 of the previous list).

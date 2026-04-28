@@ -103,6 +103,7 @@ def _write_session_json(tmp: Path, session: CaptureSession) -> None:
         "distribution": {
             "port":             session.dist_port,
             "trigger_tick_ms":  ds.trigger_tick,
+            "trigger_idx":      ds.trigger_idx,
             "sample_period_ms": ds.sample_period_ms,
             "channels":         ds.channels,
             "rtt_ms":           session.dist_rtt_ms,
