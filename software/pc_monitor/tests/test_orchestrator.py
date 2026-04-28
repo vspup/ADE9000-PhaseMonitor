@@ -13,6 +13,7 @@ from core.capture_parser import CaptureDone, CaptureSample, CaptureStatus
 from core.distribution_client import (
     DistCapStatus,
     DistributionError,
+    DistributionTimeout,
     VbusBlockError,
 )
 from core.orchestrator import (
@@ -322,6 +323,55 @@ class TestDrain(unittest.TestCase):
         with self.assertRaises(OrchestratorError) as cm:
             orc.run()
         self.assertIn("Distribution", str(cm.exception))
+
+    def test_dist_cap_status_isolated_failure_recovers(self):
+        """One blip → retry → success. Must not abort the session."""
+        ade  = _make_fake_ade()
+        dist = _make_fake_dist()
+        # First call raises, second returns READY → drain succeeds.
+        dist.cap_status.side_effect = [
+            DistributionTimeout("simulated RS-485 garble"),
+            _dist_cap_status(state="READY"),
+        ]
+        orc = Orchestrator(_cfg(), ade, dist)
+        orc._DRAIN_POLL_S = 0.01
+        orc.run()   # no exception
+        self.assertEqual(dist.cap_status.call_count, 2)
+
+    def test_dist_cap_status_consecutive_failures_raise(self):
+        """Three consecutive failures → escalate with structured info."""
+        ade  = _make_fake_ade()
+        dist = _make_fake_dist()
+        dist.cap_status.side_effect = [
+            DistributionTimeout("garble 1"),
+            DistributionTimeout("garble 2"),
+            DistributionTimeout("garble 3"),
+        ]
+        orc = Orchestrator(_cfg(), ade, dist)
+        orc._DRAIN_POLL_S = 0.01
+        with self.assertRaises(OrchestratorError) as cm:
+            orc.run()
+        self.assertEqual(cm.exception.phase,   "DRAIN")
+        self.assertEqual(cm.exception.device,  "Distribution")
+        self.assertEqual(cm.exception.command, "CAP STATUS")
+        self.assertIn("unresponsive", str(cm.exception))
+
+    def test_dist_cap_status_failure_counter_resets_on_success(self):
+        """fail, fail, success, fail, fail, success → never hits 3 in a row."""
+        ade  = _make_fake_ade()
+        dist = _make_fake_dist()
+        dist.cap_status.side_effect = [
+            DistributionTimeout("blip 1"),
+            DistributionTimeout("blip 2"),
+            _dist_cap_status(state="CAPTURING"),
+            DistributionTimeout("blip 3"),
+            DistributionTimeout("blip 4"),
+            _dist_cap_status(state="READY"),
+        ]
+        orc = Orchestrator(_cfg(), ade, dist)
+        orc._DRAIN_POLL_S = 0.01
+        orc.run()   # no exception
+        self.assertEqual(dist.cap_status.call_count, 6)
 
 
 # ---------------------------------------------------------------------------

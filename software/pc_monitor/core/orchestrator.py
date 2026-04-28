@@ -23,6 +23,7 @@ from core.distribution_client import (
     DistCapSample,
     DistCapStatus,
     DistributionClient,
+    DistributionError,
     DistributionTimeout,
     VbusBlockError,
 )
@@ -124,6 +125,20 @@ class Orchestrator:
     # Distribution window ≈ 7.5 s → budget 15 s (covers 12 s precharge).
     _ADE_DRAIN_TIMEOUT  = 6.0
     _DIST_DRAIN_TIMEOUT = 15.0
+
+    # Per-call timeout for `dist.cap_status()` while draining. The default
+    # 2 s in DistributionClient was tight enough that one stray RS-485
+    # garble or a brief FW stall (CAPTURING → READY transition) would fail
+    # the whole session; 3 s gives the next poll a chance to cover the
+    # gap, paired with the retry budget below.
+    _DIST_CAP_STATUS_TIMEOUT = 3.0
+
+    # How many *consecutive* CAP STATUS failures we tolerate before
+    # treating Distribution as unresponsive. RS-485 link is half-duplex
+    # and we've observed isolated parse failures (`tCERR` etc.) that
+    # recover on the next request. Three in a row, however, means the
+    # link is genuinely down — escalate to a session abort.
+    _DIST_CAP_STATUS_MAX_CONSEC_FAILS = 3
 
     def __init__(
         self,
@@ -273,6 +288,7 @@ class Orchestrator:
         dist_cs: Optional[DistCapStatus] = None
         ade_deadline  = time.monotonic() + self._ADE_DRAIN_TIMEOUT
         dist_deadline = time.monotonic() + self._DIST_DRAIN_TIMEOUT
+        dist_consec_fails = 0
 
         while ade_cs is None or dist_cs is None:
             if ade_cs is None:
@@ -297,18 +313,42 @@ class Orchestrator:
                         f"{self._DIST_DRAIN_TIMEOUT:.0f} s",
                         phase="DRAIN", device="Distribution", command="CAP STATUS",
                     )
-                cs = self._dist.cap_status()
-                if cs.state == "READY":
-                    dist_cs = cs
-                    self._log("DRAIN", "Distribution READY")
-                elif cs.state == "ERROR":
-                    raise OrchestratorError(
-                        "Distribution capture FSM reached ERROR",
-                        phase="DRAIN", device="Distribution", command="CAP STATUS",
+                try:
+                    cs = self._dist.cap_status(timeout=self._DIST_CAP_STATUS_TIMEOUT)
+                except DistributionError as exc:
+                    # RS-485 is half-duplex and occasionally drops or
+                    # garbles a single reply (see `mps2p-FW-db-v3`'s known
+                    # latent issues). Tolerate isolated misses; abort only
+                    # when failures accumulate consecutively.
+                    dist_consec_fails += 1
+                    if dist_consec_fails >= self._DIST_CAP_STATUS_MAX_CONSEC_FAILS:
+                        raise OrchestratorError(
+                            f"Distribution unresponsive: "
+                            f"{dist_consec_fails} consecutive CAP STATUS "
+                            f"failures — last: {exc}",
+                            phase="DRAIN", device="Distribution",
+                            command="CAP STATUS",
+                        ) from exc
+                    self._log(
+                        "DRAIN",
+                        f"warning: CAP STATUS retry "
+                        f"{dist_consec_fails}/"
+                        f"{self._DIST_CAP_STATUS_MAX_CONSEC_FAILS} "
+                        f"({exc})",
                     )
                 else:
-                    self._log("DRAIN",
-                              f"Distribution {cs.state}  {cs.samples}")
+                    dist_consec_fails = 0
+                    if cs.state == "READY":
+                        dist_cs = cs
+                        self._log("DRAIN", "Distribution READY")
+                    elif cs.state == "ERROR":
+                        raise OrchestratorError(
+                            "Distribution capture FSM reached ERROR",
+                            phase="DRAIN", device="Distribution", command="CAP STATUS",
+                        )
+                    else:
+                        self._log("DRAIN",
+                                  f"Distribution {cs.state}  {cs.samples}")
 
             if ade_cs is None or dist_cs is None:
                 time.sleep(self._DRAIN_POLL_S)
