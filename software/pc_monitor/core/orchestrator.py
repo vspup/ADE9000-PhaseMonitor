@@ -160,6 +160,8 @@ class Orchestrator:
         # Phase 0 — handshake
         self._log("CONNECT", "SET WMODE capture → ADE9000")
         self._ade.set_wmode_capture()
+        self._log("CONNECT", "MODE CMD → Distribution")
+        self._dist.mode_cmd()
         self._log("CONNECT", "PING → Distribution (verify reachable)")
         self._dist.ping()
 

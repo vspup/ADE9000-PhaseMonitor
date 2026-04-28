@@ -294,6 +294,12 @@ class DistributionClient:
 
     # -- commands --
 
+    def mode_cmd(self, timeout: float = 2.0) -> None:
+        """Switch Distribution board to CMD mode; verify ack."""
+        reply = self._send_recv(DistributionProtocol.CMD_MODE_CMD, timeout)
+        if "MODE CMD OK" not in reply.upper():
+            raise DistributionError(f"MODE CMD failed: {reply!r}")
+
     def ping(self, timeout: float = 1.0) -> float:
         """Send PING; return round-trip time in ms."""
         self._drain()
