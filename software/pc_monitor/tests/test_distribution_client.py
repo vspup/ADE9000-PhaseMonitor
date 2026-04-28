@@ -129,6 +129,17 @@ class TestParseCapStatus(unittest.TestCase):
         self.assertIsNotNone(d)
         self.assertEqual(d["trigger_tick"], 0)
 
+    def test_corrupted_prefix_parses(self):
+        # "CAP STATUS" may be garbled by RS-485 echo; fields that follow are intact.
+        d = DistributionProtocol.parse_cap_status(
+            "PT*UTUS state=CAPTURING samples=197 trigger_idx=4 "
+            "sample_period_ms=25 channels=8 trigger_tick=984399"
+        )
+        self.assertIsNotNone(d)
+        self.assertEqual(d["state"], "CAPTURING")
+        self.assertEqual(d["samples"], 197)
+        self.assertEqual(d["trigger_tick"], 984399)
+
     def test_garbage_returns_none(self):
         self.assertIsNone(DistributionProtocol.parse_cap_status("PONG"))
         self.assertIsNone(DistributionProtocol.parse_cap_status(""))
@@ -369,10 +380,38 @@ class TestCapStatus(unittest.TestCase):
         self.assertEqual(cs.trigger_tick, 88000)
 
     def test_bad_reply_raises(self):
+        # Unrecognized reply is skipped by the scan loop; timeout fires instead.
+        # DistributionTimeout is-a DistributionError, so assertRaises still passes.
         t = _FakeTransport()
         t.push_replies("ERR: not ready")
         with self.assertRaises(DistributionError):
-            DistributionClient(t).cap_status()
+            DistributionClient(t).cap_status(timeout=0.05)
+
+    def test_corrupted_prefix_still_parses(self):
+        # RS-485 half-duplex switching can corrupt the first bytes of the reply,
+        # e.g. "CAP STATUS" → "PT*UTUS".  Fields after the prefix are intact.
+        t = _FakeTransport()
+        t.push_replies(
+            "PT*UTUS state=CAPTURING samples=197 trigger_idx=4 "
+            "sample_period_ms=25 channels=8 trigger_tick=984399"
+        )
+        cs = DistributionClient(t).cap_status()
+        self.assertEqual(cs.state, "CAPTURING")
+        self.assertEqual(cs.samples, 197)
+        self.assertEqual(cs.trigger_idx, 4)
+        self.assertEqual(cs.trigger_tick, 984399)
+
+    def test_echo_line_skipped(self):
+        # RS-485 adapter can echo the sent command as a separate line before
+        # the actual reply.  The scan loop must skip it.
+        t = _FakeTransport()
+        t.push_replies(
+            "CAP STATUS",   # echo: no state/samples fields → not parseable
+            "CAP STATUS state=READY samples=300 trigger_idx=50 "
+            "sample_period_ms=25 channels=8 trigger_tick=1",
+        )
+        cs = DistributionClient(t).cap_status()
+        self.assertEqual(cs.state, "READY")
 
 
 # ---------------------------------------------------------------------------

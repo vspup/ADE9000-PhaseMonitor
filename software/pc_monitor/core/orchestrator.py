@@ -305,8 +305,8 @@ class Orchestrator:
         """Best-effort SET WMODE monitor so ADE9000 resumes telemetry after session."""
         try:
             self._ade.set_wmode_monitor()
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log("DONE", f"warning: SET WMODE monitor failed — {exc}")
 
     def _abort_both(self) -> None:
         """Best-effort abort of both devices on the error path.

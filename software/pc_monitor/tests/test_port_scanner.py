@@ -85,19 +85,44 @@ class TestProbeAde9000(unittest.TestCase):
         data = b"NOISE\r\n" + _telemetry_reply()
         self.assertTrue(self._run(data))
 
-    def test_never_writes_to_port(self):
-        """ADE9000 probe must be strictly listen-only."""
+    def test_no_write_when_telemetry_found_in_phase1(self):
+        """If telemetry arrives in phase 1, phase 2 write must not happen."""
         mock_s = _make_serial(_telemetry_reply())
         with patch("core.port_scanner.serial.Serial", return_value=mock_s):
             _probe_ade9000("COM99", timeout=0.2)
         mock_s.write.assert_not_called()
 
-    def test_never_writes_even_on_silence(self):
-        """Even when nothing is received, no bytes are sent."""
+    def test_writes_wmode_monitor_when_silent(self):
+        """When no telemetry is heard in phase 1, probe sends \\nSET WMODE monitor\\n.
+
+        The leading \\n flushes any garbage that _probe_dist (57600 baud) may
+        have left in the firmware receive buffer via framing errors.
+        """
         mock_s = _make_serial(b"")
         with patch("core.port_scanner.serial.Serial", return_value=mock_s):
             _probe_ade9000("COM99", timeout=0.1)
-        mock_s.write.assert_not_called()
+        mock_s.write.assert_called_once_with(b"\nSET WMODE monitor\n")
+
+    def test_wmode_ack_returns_true(self):
+        """Probe returns True when firmware acks SET WMODE monitor (ADE9000 in IDLE/capture)."""
+        ack = (
+            b'{"status":"ok","event":"wmode","wmode":"monitor"}\r\n'
+        )
+        # ack delivered only after phase 1 timeout (mock returns data on first read,
+        # but it's b"" in phase 1 since ack arrives after the write)
+        # Simulate: phase 1 silent, phase 2 ack received.
+        phase = [0]
+        def _read_side_effect(n):
+            # Return ack bytes only after write has been called (phase 2)
+            if mock_s.write.call_count > 0 and phase[0] == 0:
+                phase[0] = 1
+                return ack
+            return b""
+        mock_s = _make_serial(b"")
+        mock_s.read.side_effect = _read_side_effect
+        with patch("core.port_scanner.serial.Serial", return_value=mock_s):
+            result = _probe_ade9000("COM99", timeout=0.2)
+        self.assertTrue(result)
 
 
 # ---------------------------------------------------------------------------
@@ -237,20 +262,26 @@ class TestScanPorts(unittest.TestCase):
         self.assertFalse(result.complete)
 
     def test_same_port_not_in_both_lists(self):
-        """A port claimed as ADE9000 must not be probed for Distribution."""
-        dist_probed = []
-        def fake_dist(port, timeout):
-            dist_probed.append(port)
+        """A port claimed as Distribution must not be probed for ADE9000.
+
+        Distribution probe runs first; if it returns True, ADE9000 probe is
+        skipped for that port.  This prevents the ADE9000 probe's phase-2
+        write (SET WMODE monitor at 115200) from reaching a Distribution port
+        and killing its STM32 UART receive interrupt via framing errors.
+        """
+        ade_probed = []
+        def fake_ade(port, timeout):
+            ade_probed.append(port)
             return True
 
         with self._mock_ports("COM5"), \
-             patch("core.port_scanner._probe_ade9000", return_value=True), \
-             patch("core.port_scanner._probe_dist", side_effect=fake_dist):
+             patch("core.port_scanner._probe_dist", return_value=True), \
+             patch("core.port_scanner._probe_ade9000", side_effect=fake_ade):
             result = scan_ports(timeout=0.1)
 
-        self.assertIn("COM5", result.arduino_ports)
-        self.assertNotIn("COM5", dist_probed)
-        self.assertEqual(result.dist_ports, [])
+        self.assertIn("COM5", result.dist_ports)
+        self.assertNotIn("COM5", ade_probed)
+        self.assertEqual(result.arduino_ports, [])
 
     def test_multiple_ports_of_same_type(self):
         with self._mock_ports("COM1", "COM2", "COM3"), \

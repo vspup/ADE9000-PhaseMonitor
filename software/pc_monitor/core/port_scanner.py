@@ -53,12 +53,18 @@ class ScanResult:
 # ---------------------------------------------------------------------------
 
 def _is_ade9000_json(data: bytes) -> bool:
-    """Return True if `data` contains at least one recognisable ADE9000 line."""
+    """Return True if `data` contains at least one recognisable ADE9000 JSON line.
+
+    Matches telemetry packets ("ts" key) and any event dict ("event" key),
+    which includes sync, wmode, cap_status, cap_triggered, etc.
+    Distribution board speaks plain text — never emits JSON — so any valid
+    JSON object with these keys is conclusively ADE9000.
+    """
     for sep in (b"\r\n", b"\n", b"\r"):
         for chunk in data.split(sep):
             try:
                 d = json.loads(chunk.decode("utf-8", errors="ignore").strip())
-                if "ts" in d or d.get("event") == "sync":
+                if isinstance(d, dict) and ("ts" in d or "event" in d):
                     return True
             except (json.JSONDecodeError, ValueError):
                 pass
@@ -66,12 +72,23 @@ def _is_ade9000_json(data: bytes) -> bool:
 
 
 def _probe_ade9000(port: str, timeout: float) -> bool:
-    """Return True if port streams ADE9000 JSON telemetry at 115200.
+    """Return True if port looks like ADE9000 Phase Monitor at 115200.
 
-    Strictly listen-only — no bytes are written.  This makes the probe safe
-    to run on a Distribution board port without corrupting its UART state.
-    Covers ADE9000 in WMODE monitor (autonomous 5 Hz telemetry).
+    Two-phase probe:
+      Phase 1 (first half of timeout): listen-only.  Detects ADE9000 in
+        WMODE monitor by its autonomous 5 Hz JSON telemetry.  Safe on any
+        port — no bytes are written.
+      Phase 2 (second half): send "SET WMODE monitor", listen for JSON ack.
+        Detects ADE9000 in WMODE capture (silent after a session) or IDLE
+        (firmware default at boot).  Side-effect: leaves ADE9000 in monitor
+        mode, ready for the next scan or session.
+
+    On a Distribution port "SET WMODE monitor" arrives as framing errors
+    (wrong baud rate 115200 vs 57600); the STM32 UART discards them without
+    emitting JSON, so the probe still returns False and the Distribution probe
+    runs next without interference.
     """
+    half = timeout / 2.0
     try:
         with serial.Serial(
             port=port, baudrate=115200,
@@ -79,9 +96,23 @@ def _probe_ade9000(port: str, timeout: float) -> bool:
             stopbits=serial.STOPBITS_ONE, timeout=0.05,
         ) as s:
             s.reset_input_buffer()
-            deadline = time.monotonic() + timeout
             buf = b""
-            while time.monotonic() < deadline:
+
+            # Phase 1: listen-only
+            deadline1 = time.monotonic() + half
+            while time.monotonic() < deadline1:
+                chunk = s.read(256)
+                if chunk:
+                    buf += chunk
+                    if _is_ade9000_json(buf):
+                        return True
+
+            # Phase 2: wake ADE9000 from IDLE / WMODE capture.
+            # Prepend \n to flush any garbage bytes that _probe_dist (57600 baud)
+            # may have left in the firmware's receive buffer via framing errors.
+            s.write(b"\nSET WMODE monitor\n")
+            deadline2 = time.monotonic() + half
+            while time.monotonic() < deadline2:
                 chunk = s.read(256)
                 if chunk:
                     buf += chunk
@@ -132,8 +163,18 @@ def scan_ports(
 ) -> ScanResult:
     """Probe all available COM ports; return lists of matching ports per device.
 
-    Each port is probed for ADE9000 first (listen-only at 115200), then for
-    Distribution board (STATUS at 57600) if the ADE9000 probe found nothing.
+    Probe order per port: Distribution first, then ADE9000.
+
+    Distribution probe (57600, sends "STATUS\\r\\n") runs first because:
+      - It is purely text-based and causes only harmless framing errors on an
+        ADE9000 port (Arduino SAMD21 UART clears FERR flags in its ISR and
+        continues receiving — no side effects).
+      - ADE9000 probe phase 2 sends "SET WMODE monitor\\n" at 115200.  On a
+        Distribution port this triggers framing errors that kill the STM32
+        HAL receive interrupt (no ErrorCallback re-arm), making the UART deaf.
+        Running ADE9000 probe only on ports NOT already claimed as Distribution
+        prevents this damage entirely.
+
     Probes run in parallel across ports.
 
     Args:
@@ -149,13 +190,13 @@ def scan_ports(
     lock = threading.Lock()
 
     def _probe_port(port: str) -> None:
-        if _probe_ade9000(port, timeout):
-            with lock:
-                arduino_ports.append(port)
-            return
         if _probe_dist(port, timeout):
             with lock:
                 dist_ports.append(port)
+            return
+        if _probe_ade9000(port, timeout):
+            with lock:
+                arduino_ports.append(port)
 
     workers = min(max_workers, max(len(ports), 1))
     with ThreadPoolExecutor(max_workers=workers) as ex:

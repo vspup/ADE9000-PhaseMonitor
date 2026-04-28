@@ -116,6 +116,14 @@ class _Transport:
             bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE, timeout=0.1,
         )
+        # Flush any garbage the port scanner may have deposited in the
+        # firmware's receive buffer (e.g., _probe_dist sent STATUS\r\n at
+        # 57600 baud to this 115200 port, leaving framing-error bytes).
+        # A bare \n causes the firmware to process the garbage as an empty
+        # line (unknown_cmd, ignored here), leaving the buffer clean.
+        self._port.write(b"\n")
+        time.sleep(0.1)
+        self._port.reset_input_buffer()
         self._thread = threading.Thread(target=self._reader, daemon=True)
         self._thread.start()
 

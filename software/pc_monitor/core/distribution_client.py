@@ -77,12 +77,16 @@ class DistributionProtocol:
         re.IGNORECASE,
     )
     _CAP_STATUS_RE = re.compile(
-        r"CAP\s+STATUS\s+state=(?P<state>\w+)"
+        # "CAP STATUS" prefix is intentionally NOT required:
+        # RS-485 TX→RX adapter switching can corrupt the first bytes of the
+        # reply, turning "CAP STATUS" into garbled characters.  The data fields
+        # that follow are received intact and are distinctive enough to match.
+        r"state=(?P<state>\w+)"
         r"\s+samples=(?P<samples>\d+)"
         r"\s+trigger_idx=(?P<trigger_idx>-?\d+)"
         r"\s+sample_period_ms=(?P<sample_period_ms>\d+)"
         r"\s+channels=(?P<channels>\d+)"
-        r"(?:\s+trigger_tick=(?P<trigger_tick>\d+))?",  # optional: FW buf 96 B truncates it
+        r"(?:\s+trigger_tick=(?P<trigger_tick>\d+))?",
         re.IGNORECASE,
     )
     _CAP_SAMPLE_RE = re.compile(
@@ -363,11 +367,31 @@ class DistributionClient:
         raise DistributionError(f"START failed: {reply!r}")
 
     def cap_status(self, timeout: float = 2.0) -> DistCapStatus:
-        reply = self._send_recv(DistributionProtocol.CMD_CAP_STATUS, timeout)
-        parsed = DistributionProtocol.parse_cap_status(reply)
-        if parsed is None:
-            raise DistributionError(f"bad CAP STATUS reply: {reply!r}")
-        return DistCapStatus(**parsed)
+        """Query capture FSM state; return typed DistCapStatus.
+
+        Scans lines until one parses, skipping RS-485 echo / garbled lines.
+        Raises DistributionTimeout if no valid reply arrives within timeout.
+        """
+        self._drain()
+        self._t.send_line(DistributionProtocol.CMD_CAP_STATUS)
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DistributionTimeout(
+                    f"CAP STATUS: no valid reply after {timeout:.1f}s"
+                )
+            try:
+                line = self._t.rx_queue.get(timeout=min(remaining, 0.1))
+            except queue.Empty:
+                continue
+            if DistributionProtocol.parse_evt(line) is not None:
+                self._evt_lines.append(line)
+                continue
+            parsed = DistributionProtocol.parse_cap_status(line)
+            if parsed is not None:
+                return DistCapStatus(**parsed)
+            # Garbled / echo line — keep scanning.
 
     def cap_read(self, offset: int, count: int, timeout: float = 30.0) -> list[DistCapSample]:
         """Send CAP READ; collect and return all samples up to the done marker."""

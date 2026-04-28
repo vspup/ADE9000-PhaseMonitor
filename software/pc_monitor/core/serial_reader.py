@@ -1,3 +1,4 @@
+import time
 from typing import Optional
 
 import serial
@@ -25,6 +26,7 @@ class SerialReader(QThread):
     def run(self) -> None:
         try:
             self._ser = serial.Serial(self._port, self._baud, timeout=1.0)
+            time.sleep(0.2)  # Windows USB CDC: first write can be dropped without settle delay
             self._running = True
             self.connection_changed.emit(True)
 
