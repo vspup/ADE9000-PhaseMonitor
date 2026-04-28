@@ -119,11 +119,15 @@ class TestParseCapStatus(unittest.TestCase):
         )
         self.assertEqual(d["state"], "READY")
 
-    def test_missing_trigger_tick_returns_none(self):
-        self.assertIsNone(DistributionProtocol.parse_cap_status(
+    def test_missing_trigger_tick_defaults_to_zero(self):
+        # FW s_cap_tx[96] truncates the line before "trigger_tick=<val>";
+        # parser must accept it and default trigger_tick to 0.
+        d = DistributionProtocol.parse_cap_status(
             "CAP STATUS state=IDLE samples=0 trigger_idx=0 "
             "sample_period_ms=25 channels=8"
-        ))
+        )
+        self.assertIsNotNone(d)
+        self.assertEqual(d["trigger_tick"], 0)
 
     def test_garbage_returns_none(self):
         self.assertIsNone(DistributionProtocol.parse_cap_status("PONG"))

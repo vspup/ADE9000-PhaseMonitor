@@ -82,7 +82,7 @@ class DistributionProtocol:
         r"\s+trigger_idx=(?P<trigger_idx>-?\d+)"
         r"\s+sample_period_ms=(?P<sample_period_ms>\d+)"
         r"\s+channels=(?P<channels>\d+)"
-        r"\s+trigger_tick=(?P<trigger_tick>\d+)",
+        r"(?:\s+trigger_tick=(?P<trigger_tick>\d+))?",  # optional: FW buf 96 B truncates it
         re.IGNORECASE,
     )
     _CAP_SAMPLE_RE = re.compile(
@@ -116,7 +116,7 @@ class DistributionProtocol:
             "trigger_idx":      int(m.group("trigger_idx")),
             "sample_period_ms": int(m.group("sample_period_ms")),
             "channels":         int(m.group("channels")),
-            "trigger_tick":     int(m.group("trigger_tick")),
+            "trigger_tick":     int(m.group("trigger_tick") or 0),
         }
 
     @staticmethod
