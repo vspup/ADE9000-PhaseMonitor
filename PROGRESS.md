@@ -1,101 +1,88 @@
-# Orchestrator — progress snapshot (2026-04-24)
+# Orchestrator — progress snapshot (2026-04-28)
 
-## What was done this session
+## What is working (end-to-end verified on hardware)
 
-### Groundwork (committed before this session)
-- `docs/protocols/sequencer.md` — PC-side cross-device orchestration contract
-  (trigger master, asymmetric timing, CSV layout, error matrix, terminology mapping).
-- `software/pc_monitor/db_tool.py` — standalone Tkinter diagnostic tool for the
-  Distribution Board (PING/STATUS/ARM/START, CAP STATUS/READ, EVT, plot window).
+Full startup-capture session runs reliably:
 
-### This session (commits 8562e06 → c801d80)
+```
+CONNECT → SYNC → ARM → FIRE → DRAIN → READ → WRITE → DONE
+```
+
+ADE9000 500 samples @ 10 ms/sample (5 s window)  
+Distribution 254 samples @ 25 ms/sample (6.35 s window)  
+Session artifacts written atomically to `captures/<session_id>/`
+
+## Commits this session (dev, ADE9000-PhaseMonitor)
 
 | Commit | What |
 |--------|------|
-| `8562e06` | `core/distribution_client.py` + `tests/test_distribution_client.py` |
-| `b8346a2` | `core/ade9000_client.py` + `tests/test_ade9000_client.py` |
-| `c801d80` | `core/orchestrator.py` + `tests/test_orchestrator.py` |
+| `313ba1c` | `core/session_writer.py` + tests (33) |
+| `b944df7` | `core/orchestrator_worker.py` + tests |
+| `aad331f` | `ui/orchestrator_window.py` + `orchestrator_tool.py` |
+| `75896ab` | fix: MODE CMD before PING to Distribution |
+| `1c47b05` | fix: ping() scans for PONG, skips RS-485 echo garbage |
+| `4e05626` | fix: trigger_tick optional in CAP STATUS parser (FW buf 96→128) |
+| `7794009` | feat: port_scanner + Scan button in UI |
+| `bbe045f` | fix: listen-first probe in _probe_ade9000 (no TX on alien ports) |
+| `ee9cb5d` | feat: UI redesign — per-device dropdowns, indicators, tooltips |
+| `e64bb2e` | fix: restore ADE9000 monitor mode after session; substring STATUS match |
 
-#### `core/distribution_client.py`
-Qt-free blocking client for the Distribution Board RS-485 protocol.
-- `DistributionProtocol` — pure parsers: STATUS, CAP STATUS, CAP READ
-  samples/done, EVT lines.
-- `DistributionClient` — blocking API: `ping`, `ping_probe`, `status`, `arm`,
-  `start` (raises `VbusBlockError` / `StartAlreadyOnError`), `cap_status`,
-  `cap_read`, `take_events`.
-- `_Transport` — background reader thread, CRLF/LF/CR tolerant, ASCII.
+## Commits this session (dev, mps2p-FW-db-v3)
 
-#### `core/ade9000_client.py`
-Qt-free blocking client for the ADE9000 JSON Lines protocol.
-- `Ade9000Protocol` — command strings, JSON parsing, telemetry detection.
-- `Ade9000Client` — blocking API: `set_wmode_capture` (connect handshake),
-  `sync_probe` (N SYNC probes → `SyncResult`, recv_ns recorded before JSON
-  parsing), `cap_set`, `cap_arm_manual`, `cap_arm_dip`, `cap_trigger`,
-  `cap_abort`, `cap_status` (→ `CaptureStatus`), `cap_read`
-  (→ `list[CaptureSample]` + `CaptureDone`).
-- Telemetry packets skipped in `_recv_json`; sync replies matched by seq.
-
-#### `core/orchestrator.py`
-Cross-device sequencer. Implements `sequencer.md §4` exactly.
-- `OrchestratorConfig` — ports, pre/post, trigger_mode (manual|dip),
-  dip_threshold, output_dir.
-- `CaptureSession` — raw data from both devices; no filesystem I/O.
-- `Orchestrator.run()` — blocking, phases 0–5:
-  CONNECT → SYNC → ARM → FIRE → DRAIN → READ.
-- Error handling per `sequencer.md §7`:
-  `vbus_error` → abort ADE9000, raise `OrchestratorError`;
-  drain timeout (6 s ADE9000 / 15 s Distribution) → raise;
-  any exception → `_abort_both()`, ports always closed.
-- Progress callback `on_progress(phase, msg)` for UI integration.
+| Commit | What |
+|--------|------|
+| `37c8fa5` | fix: s_cap_tx 96→128 B (CAP STATUS truncated trigger_tick) |
+| `76a3513` | feat: Phase 5 EVT wiring — vbus_block + RS485_U1_EmitEvent docs |
 
 ## Test status
 
 ```
-151 passed, 0 failed  (3.18 s)
+219 passed, 1 skipped  (5.67 s)
 python -m pytest tests/  from software/pc_monitor/
 ```
 
-| File | Tests | Covers |
-|------|-------|--------|
-| `test_distribution_client.py` | 51 | Protocol parsers + client API |
-| `test_ade9000_client.py` | 36 | Protocol helpers + client API |
-| `test_orchestrator.py` | 23 | Happy path, sequencing, drain, §7 errors |
-| `test_capture_parser.py` | 20 | ADE9000 capture event parser |
-| `test_packet_parser.py` | 12 | ADE9000 telemetry parser |
-| `test_sync_probe.py` | 9 | Clock offset estimation |
+| File | Tests |
+|------|-------|
+| `test_distribution_client.py` | 52 |
+| `test_ade9000_client.py` | 36 |
+| `test_orchestrator.py` | 23 |
+| `test_session_writer.py` | 33 |
+| `test_orchestrator_worker.py` | 1 skipped (no PySide6 in test env) |
+| `test_port_scanner.py` | 35 |
+| `test_capture_parser.py` | 20 |
+| `test_packet_parser.py` | 12 |
+| `test_sync_probe.py` | 9 |
 
-## What remains (orchestrator plan steps 3–5)
+## Known issues / to fix next session
 
-### Step 3 — `core/session_writer.py`
-Write the three session artifacts to disk (all-or-nothing):
+| Priority | Issue |
+|----------|-------|
+| High | ADE9000 RTT_best 96–110 ms (Windows USB latency) → ~50 ms jitter in `offset_ad_ms`. Investigate USB CDC latency or increase `best_k`. |
+| Medium | `dist_offset_ms = rtt/2` approximation — needs `SYNC <seq>` in Distribution FW. |
+| Medium | `_Transport` duplicated in `ade9000_client.py` and `distribution_client.py` — extract to `core/serial_transport.py`. |
+| Low | `db_tool.py` has own copy of `DistributionProtocol` — replace with import. |
+| Low | No `CAP ABORT` in Distribution FW — FSM stuck on error until reconnect. |
+
+## Not yet implemented
+
+- **Data viewer**: after DONE, no plots in UI. Only session path shown.
+- **Session browser**: no way to re-open previous sessions.
+- **Re-run without restart**: after error on FIRE/DRAIN, board stays in ARM. Need reset flow in UI.
+- **Distribution SYNC command**: proper clock offset (currently rtt/2).
+
+## Architecture
+
 ```
-captures/<session_id>/
-  arduino.csv        — i, uab, ubc, uca, ia, ib, ic
-  distribution.csv   — idx, ch0_raw, ch0_hex, ..., ch7_raw, ch7_hex
-  session.json       — offsets, trigger ticks, FW versions, sample periods
+orchestrator_tool.py
+  └── OrchestratorWindow (PySide6)
+        ├── port_scanner.scan_ports()         ← auto COM detection
+        └── OrchestratorWorker (QThread)
+              ├── Orchestrator.run()
+              │     ├── Ade9000Client (115200, JSON Lines)
+              │     └── DistributionClient (57600, text RS-485)
+              └── session_writer.write_session()
+                    └── captures/<session_id>/
+                          ├── arduino.csv
+                          ├── distribution.csv
+                          └── session.json
 ```
-Input: `CaptureSession` (returned by `Orchestrator.run()`).
-Output: `SessionPaths` dataclass with the three `Path` objects.
-
-### Step 4 — `core/orchestrator_worker.py`
-Thin `QThread` wrapper:
-- Signals: `progress(str, str)`, `done(CaptureSession)`, `failed(str)`.
-- `run()` calls `Orchestrator.run()` then `session_writer.write_session()`.
-
-### Step 5 — `ui/orchestrator_window.py` + `orchestrator_tool.py`
-Standalone PySide6 window:
-- Port selectors for both devices (Arduino + Distribution).
-- Pre/Post spinboxes, trigger mode radio (manual / dip).
-- Run button → progress log → on done: session directory path + key metrics
-  (offset_ad_ms, trigger ticks, sample counts).
-
-## Known gaps / follow-ups (from sequencer.md §8)
-
-- Distribution has no proper `SYNC` command — `dist_offset_ms` is `rtt/2`
-  approximation. Needs `SYNC <seq>` in FW (separate Distribution PR).
-- No `CAP ABORT` command on Distribution — error recovery re-ARMs to IDLE.
-- `db_tool.py` still has its own copy of `DistributionProtocol`; should
-  import from `distribution_client.py` (cleanup PR).
-- `_Transport` duplicated between `ade9000_client.py` and
-  `distribution_client.py`; extract to `core/serial_transport.py` once
-  orchestrator layer stabilises.
