@@ -3,48 +3,62 @@
 Probes all available serial ports in parallel and identifies devices by
 their protocol responses. No firmware changes required.
 
-ADE9000 probe  — 115200 baud, sends "SYNC 1", expects JSON {"event":"sync",...}
-Distribution probe — 57600 baud, sends "STATUS", expects "STATUS power=..."
+ADE9000 probe  — 115200 baud, listens for autonomous JSON telemetry
+                 ({"ts":...} or {"event":"sync"}).  No bytes written —
+                 harmless on any port, including Distribution board.
+Distribution   — 57600 baud, sends "STATUS", expects "STATUS power=..."
 
 Usage:
     result = scan_ports()
-    print(result.arduino_port, result.dist_port)
+    # result.arduino_ports — list of ports that look like ADE9000
+    # result.dist_ports    — list of ports that look like Distribution
 """
 from __future__ import annotations
 
 import json
-import queue
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import serial
 import serial.tools.list_ports
 
 
+# ---------------------------------------------------------------------------
+# Result type
+# ---------------------------------------------------------------------------
+
 @dataclass
 class ScanResult:
-    arduino_port: Optional[str]
-    dist_port:    Optional[str]
+    arduino_ports: list[str] = field(default_factory=list)
+    dist_ports:    list[str] = field(default_factory=list)
+
+    @property
+    def arduino_port(self) -> Optional[str]:
+        return self.arduino_ports[0] if self.arduino_ports else None
+
+    @property
+    def dist_port(self) -> Optional[str]:
+        return self.dist_ports[0] if self.dist_ports else None
 
     @property
     def complete(self) -> bool:
-        return self.arduino_port is not None and self.dist_port is not None
+        return bool(self.arduino_ports) and bool(self.dist_ports)
 
 
 # ---------------------------------------------------------------------------
-# Internal probes — each opens the port, sends one command, reads reply
+# Internal probes
 # ---------------------------------------------------------------------------
 
 def _is_ade9000_json(data: bytes) -> bool:
-    """Return True if `data` contains at least one recognisable ADE9000 JSON line."""
+    """Return True if `data` contains at least one recognisable ADE9000 line."""
     for sep in (b"\r\n", b"\n", b"\r"):
         for chunk in data.split(sep):
             try:
                 d = json.loads(chunk.decode("utf-8", errors="ignore").strip())
-                if d.get("event") == "sync" or "ts" in d:
+                if "ts" in d or d.get("event") == "sync":
                     return True
             except (json.JSONDecodeError, ValueError):
                 pass
@@ -52,15 +66,11 @@ def _is_ade9000_json(data: bytes) -> bool:
 
 
 def _probe_ade9000(port: str, timeout: float) -> bool:
-    """Return True if port looks like an ADE9000 at 115200.
+    """Return True if port streams ADE9000 JSON telemetry at 115200.
 
-    Strategy — listen first, send only if silent:
-    1. Open at 115200, wait up to half the timeout for autonomous telemetry
-       (ADE9000 streams JSON at 5 Hz in monitor mode).  No bytes sent →
-       harmless to any other device sharing the bus.
-    2. If nothing arrives, send "SYNC 1" and wait for the rest of the timeout.
-       This covers the case where the Arduino was left in WMODE capture
-       (no autonomous stream).
+    Strictly listen-only — no bytes are written.  This makes the probe safe
+    to run on a Distribution board port without corrupting its UART state.
+    Covers ADE9000 in WMODE monitor (autonomous 5 Hz telemetry).
     """
     try:
         with serial.Serial(
@@ -69,20 +79,8 @@ def _probe_ade9000(port: str, timeout: float) -> bool:
             stopbits=serial.STOPBITS_ONE, timeout=0.05,
         ) as s:
             s.reset_input_buffer()
-
-            # Phase 1: listen silently for autonomous telemetry
-            listen_until = time.monotonic() + timeout / 2
+            deadline = time.monotonic() + timeout
             buf = b""
-            while time.monotonic() < listen_until:
-                chunk = s.read(256)
-                if chunk:
-                    buf += chunk
-                    if _is_ade9000_json(buf):
-                        return True
-
-            # Phase 2: send SYNC 1, wait for reply (capture-mode fallback)
-            s.write(b"SYNC 1\n")
-            deadline = time.monotonic() + timeout / 2
             while time.monotonic() < deadline:
                 chunk = s.read(256)
                 if chunk:
@@ -129,46 +127,43 @@ def _probe_dist(port: str, timeout: float) -> bool:
 # ---------------------------------------------------------------------------
 
 def scan_ports(
-    timeout: float = 0.5,
+    timeout: float = 0.6,
     max_workers: int = 8,
 ) -> ScanResult:
-    """Probe all available COM ports and identify ADE9000 + Distribution.
+    """Probe all available COM ports; return lists of matching ports per device.
 
-    Each port is tried for both devices in sequence (ADE9000 first, then
-    Distribution). Probes run in parallel across ports using a thread pool.
+    Each port is probed for ADE9000 first (listen-only at 115200), then for
+    Distribution board (STATUS at 57600) if the ADE9000 probe found nothing.
+    Probes run in parallel across ports.
 
     Args:
-        timeout: per-probe timeout in seconds (applied to each device type).
-        max_workers: max parallel threads (one per port).
+        timeout: per-probe timeout in seconds.
+        max_workers: max parallel threads.
 
     Returns:
-        ScanResult with the first matching port for each device type.
+        ScanResult with sorted lists of ports for each device type.
     """
     ports = [p.device for p in serial.tools.list_ports.comports()]
-    arduino_port: Optional[str] = None
-    dist_port:    Optional[str] = None
+    arduino_ports: list[str] = []
+    dist_ports:    list[str] = []
     lock = threading.Lock()
 
     def _probe_port(port: str) -> None:
-        nonlocal arduino_port, dist_port
-
-        # ADE9000 first (115200)
-        if arduino_port is None and _probe_ade9000(port, timeout):
+        if _probe_ade9000(port, timeout):
             with lock:
-                if arduino_port is None:
-                    arduino_port = port
-            return  # port claimed — skip Distribution probe
-
-        # Distribution (57600)
-        if dist_port is None and _probe_dist(port, timeout):
+                arduino_ports.append(port)
+            return
+        if _probe_dist(port, timeout):
             with lock:
-                if dist_port is None:
-                    dist_port = port
+                dist_ports.append(port)
 
     workers = min(max_workers, max(len(ports), 1))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(_probe_port, p) for p in ports]
         for f in as_completed(futures):
-            f.result()   # re-raise any unexpected exception
+            f.result()
 
-    return ScanResult(arduino_port=arduino_port, dist_port=dist_port)
+    return ScanResult(
+        arduino_ports=sorted(arduino_ports),
+        dist_ports=sorted(dist_ports),
+    )

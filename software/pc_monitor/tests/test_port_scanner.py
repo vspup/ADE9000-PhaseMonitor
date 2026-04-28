@@ -56,11 +56,11 @@ class TestProbeAde9000(unittest.TestCase):
         with patch("core.port_scanner.serial.Serial", return_value=_make_serial(replies)):
             return _probe_ade9000("COM99", timeout=0.2)
 
-    def test_sync_reply_returns_true(self):
-        self.assertTrue(self._run(_sync_reply()))
-
     def test_telemetry_reply_returns_true(self):
         self.assertTrue(self._run(_telemetry_reply()))
+
+    def test_sync_reply_returns_true(self):
+        self.assertTrue(self._run(_sync_reply()))
 
     def test_garbage_returns_false(self):
         self.assertFalse(self._run(_garbage_reply()))
@@ -78,27 +78,26 @@ class TestProbeAde9000(unittest.TestCase):
             self.assertFalse(_probe_ade9000("COM99", timeout=0.1))
 
     def test_lf_terminated_reply(self):
-        reply = json.dumps({"event": "sync", "seq": 1, "tick_ms": 0}).encode() + b"\n"
+        reply = json.dumps({"ts": 0, "mode": "delta"}).encode() + b"\n"
         self.assertTrue(self._run(reply))
 
-    def test_multi_line_finds_sync(self):
-        data = b"NOISE\r\n" + _sync_reply()
+    def test_multi_line_finds_telemetry(self):
+        data = b"NOISE\r\n" + _telemetry_reply()
         self.assertTrue(self._run(data))
 
-    def test_telemetry_found_in_listen_phase_no_sync_sent(self):
-        # Telemetry arrives immediately → SYNC 1 must NOT be sent (listen phase wins)
+    def test_never_writes_to_port(self):
+        """ADE9000 probe must be strictly listen-only."""
         mock_s = _make_serial(_telemetry_reply())
         with patch("core.port_scanner.serial.Serial", return_value=mock_s):
-            result = _probe_ade9000("COM99", timeout=0.2)
-        self.assertTrue(result)
+            _probe_ade9000("COM99", timeout=0.2)
         mock_s.write.assert_not_called()
 
-    def test_sync_sent_when_silent(self):
-        # No autonomous data → probe falls back to sending SYNC 1
+    def test_never_writes_even_on_silence(self):
+        """Even when nothing is received, no bytes are sent."""
         mock_s = _make_serial(b"")
         with patch("core.port_scanner.serial.Serial", return_value=mock_s):
-            _probe_ade9000("COM99", timeout=0.2)
-        mock_s.write.assert_called_once_with(b"SYNC 1\n")
+            _probe_ade9000("COM99", timeout=0.1)
+        mock_s.write.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +115,8 @@ class TestProbeDist(unittest.TestCase):
     def test_status_lowercase_returns_true(self):
         self.assertTrue(self._run(b"status power=1 vbus=0 mode=CMD trig=0 capture=IDLE\r\n"))
 
-    def test_sync_json_returns_false(self):
-        self.assertFalse(self._run(_sync_reply()))
+    def test_telemetry_returns_false(self):
+        self.assertFalse(self._run(_telemetry_reply()))
 
     def test_garbage_returns_false(self):
         self.assertFalse(self._run(_garbage_reply()))
@@ -143,6 +142,38 @@ class TestProbeDist(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# ScanResult
+# ---------------------------------------------------------------------------
+
+class TestScanResult(unittest.TestCase):
+    def test_complete_when_both_lists_non_empty(self):
+        r = ScanResult(arduino_ports=["COM11"], dist_ports=["COM3"])
+        self.assertTrue(r.complete)
+
+    def test_incomplete_when_arduino_missing(self):
+        r = ScanResult(arduino_ports=[], dist_ports=["COM3"])
+        self.assertFalse(r.complete)
+
+    def test_incomplete_when_dist_missing(self):
+        r = ScanResult(arduino_ports=["COM11"], dist_ports=[])
+        self.assertFalse(r.complete)
+
+    def test_arduino_port_property_first(self):
+        r = ScanResult(arduino_ports=["COM11", "COM12"], dist_ports=[])
+        self.assertEqual(r.arduino_port, "COM11")
+
+    def test_dist_port_property_first(self):
+        r = ScanResult(arduino_ports=[], dist_ports=["COM3", "COM4"])
+        self.assertEqual(r.dist_port, "COM3")
+
+    def test_arduino_port_none_when_empty(self):
+        self.assertIsNone(ScanResult().arduino_port)
+
+    def test_dist_port_none_when_empty(self):
+        self.assertIsNone(ScanResult().dist_port)
+
+
+# ---------------------------------------------------------------------------
 # scan_ports
 # ---------------------------------------------------------------------------
 
@@ -153,51 +184,43 @@ class TestScanPorts(unittest.TestCase):
                      return_value=ports)
 
     def test_both_found(self):
-        def fake_probe_ade(port, timeout):
-            return port == "COM11"
-
-        def fake_probe_dist(port, timeout):
-            return port == "COM3"
-
         with self._mock_ports("COM11", "COM3"), \
-             patch("core.port_scanner._probe_ade9000", side_effect=fake_probe_ade), \
-             patch("core.port_scanner._probe_dist",    side_effect=fake_probe_dist):
+             patch("core.port_scanner._probe_ade9000",
+                   side_effect=lambda p, t: p == "COM11"), \
+             patch("core.port_scanner._probe_dist",
+                   side_effect=lambda p, t: p == "COM3"):
             result = scan_ports(timeout=0.1)
 
-        self.assertEqual(result.arduino_port, "COM11")
-        self.assertEqual(result.dist_port,    "COM3")
+        self.assertIn("COM11", result.arduino_ports)
+        self.assertIn("COM3",  result.dist_ports)
         self.assertTrue(result.complete)
 
     def test_only_arduino_found(self):
-        def fake_probe_ade(port, timeout):
-            return port == "COM11"
-
         with self._mock_ports("COM11", "COM3"), \
-             patch("core.port_scanner._probe_ade9000", side_effect=fake_probe_ade), \
-             patch("core.port_scanner._probe_dist",    return_value=False):
+             patch("core.port_scanner._probe_ade9000",
+                   side_effect=lambda p, t: p == "COM11"), \
+             patch("core.port_scanner._probe_dist", return_value=False):
             result = scan_ports(timeout=0.1)
 
-        self.assertEqual(result.arduino_port, "COM11")
-        self.assertIsNone(result.dist_port)
+        self.assertEqual(result.arduino_ports, ["COM11"])
+        self.assertEqual(result.dist_ports, [])
         self.assertFalse(result.complete)
 
     def test_only_dist_found(self):
-        def fake_probe_dist(port, timeout):
-            return port == "COM3"
-
         with self._mock_ports("COM11", "COM3"), \
              patch("core.port_scanner._probe_ade9000", return_value=False), \
-             patch("core.port_scanner._probe_dist",    side_effect=fake_probe_dist):
+             patch("core.port_scanner._probe_dist",
+                   side_effect=lambda p, t: p == "COM3"):
             result = scan_ports(timeout=0.1)
 
+        self.assertEqual(result.dist_ports, ["COM3"])
         self.assertIsNone(result.arduino_port)
-        self.assertEqual(result.dist_port, "COM3")
 
     def test_no_ports_available(self):
         with self._mock_ports():
             result = scan_ports(timeout=0.1)
-        self.assertIsNone(result.arduino_port)
-        self.assertIsNone(result.dist_port)
+        self.assertEqual(result.arduino_ports, [])
+        self.assertEqual(result.dist_ports, [])
         self.assertFalse(result.complete)
 
     def test_no_devices_found(self):
@@ -205,32 +228,45 @@ class TestScanPorts(unittest.TestCase):
              patch("core.port_scanner._probe_ade9000", return_value=False), \
              patch("core.port_scanner._probe_dist",    return_value=False):
             result = scan_ports(timeout=0.1)
-        self.assertIsNone(result.arduino_port)
-        self.assertIsNone(result.dist_port)
+        self.assertFalse(result.complete)
 
-    def test_same_port_not_assigned_twice(self):
-        """A port claimed as ADE9000 must not also appear as Distribution."""
-        def fake_ade(port, timeout):
-            return True   # every port looks like ADE9000
-
+    def test_same_port_not_in_both_lists(self):
+        """A port claimed as ADE9000 must not be probed for Distribution."""
+        dist_probed = []
         def fake_dist(port, timeout):
-            return True   # would also match Distribution
+            dist_probed.append(port)
+            return True
 
         with self._mock_ports("COM5"), \
-             patch("core.port_scanner._probe_ade9000", side_effect=fake_ade), \
-             patch("core.port_scanner._probe_dist",    side_effect=fake_dist):
+             patch("core.port_scanner._probe_ade9000", return_value=True), \
+             patch("core.port_scanner._probe_dist", side_effect=fake_dist):
             result = scan_ports(timeout=0.1)
 
-        # COM5 claimed as arduino; dist_port must be something else (None here)
-        self.assertEqual(result.arduino_port, "COM5")
-        self.assertIsNone(result.dist_port)
+        self.assertIn("COM5", result.arduino_ports)
+        self.assertNotIn("COM5", dist_probed)
+        self.assertEqual(result.dist_ports, [])
 
-    def test_returns_scan_result(self):
+    def test_multiple_ports_of_same_type(self):
+        with self._mock_ports("COM1", "COM2", "COM3"), \
+             patch("core.port_scanner._probe_ade9000", return_value=True), \
+             patch("core.port_scanner._probe_dist", return_value=False):
+            result = scan_ports(timeout=0.1)
+
+        self.assertEqual(sorted(result.arduino_ports), ["COM1", "COM2", "COM3"])
+
+    def test_returns_scan_result_instance(self):
         with self._mock_ports(), \
              patch("core.port_scanner._probe_ade9000", return_value=False), \
              patch("core.port_scanner._probe_dist",    return_value=False):
             result = scan_ports(timeout=0.1)
         self.assertIsInstance(result, ScanResult)
+
+    def test_results_are_sorted(self):
+        with self._mock_ports("COM9", "COM1", "COM5"), \
+             patch("core.port_scanner._probe_ade9000", return_value=True), \
+             patch("core.port_scanner._probe_dist", return_value=False):
+            result = scan_ports(timeout=0.1)
+        self.assertEqual(result.arduino_ports, sorted(result.arduino_ports))
 
 
 if __name__ == "__main__":

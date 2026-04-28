@@ -1,12 +1,11 @@
-"""Orchestrator window — standalone PySide6 UI for startup capture.
-
-Runs Orchestrator + session_writer via OrchestratorWorker (background QThread).
+"""Orchestrator window — startup capture UI.
 
 Layout:
-  Configuration panel  — port selectors with Scan button, pre/post, trigger mode
-  Run button
-  Progress log         — forwarded from Orchestrator.on_progress
-  Result panel         — session dir + key metrics (visible after done)
+  Devices panel  — Scan button, status indicators, per-device port selectors
+  Settings panel — Pre/Post, trigger mode
+  Run button     — disabled until both devices found
+  Progress log
+  Result panel
 """
 from __future__ import annotations
 
@@ -39,6 +38,12 @@ from core.orchestrator import CaptureSession, OrchestratorConfig
 from core.orchestrator_worker import OrchestratorWorker
 from core.port_scanner import ScanResult, scan_ports
 
+# Colour tokens
+_GREEN = "#4caf50"
+_RED   = "#f44336"
+_GREY  = "#888888"
+_DOT   = "●"
+
 
 # ---------------------------------------------------------------------------
 # Background scanner thread
@@ -52,8 +57,7 @@ class _ScanWorker(QThread):
         self._timeout = timeout
 
     def run(self) -> None:
-        result = scan_ports(timeout=self._timeout)
-        self.finished.emit(result)
+        self.finished.emit(scan_ports(timeout=self._timeout))
 
 
 # ---------------------------------------------------------------------------
@@ -64,12 +68,15 @@ class OrchestratorWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("MPS2P Orchestrator")
-        self.resize(720, 660)
+        self.resize(740, 680)
 
         self._worker:      Optional[OrchestratorWorker] = None
         self._scan_worker: Optional[_ScanWorker]        = None
+        self._scan_result: Optional[ScanResult]         = None
+
         self._setup_ui()
-        self._refresh_ports()
+        self._populate_all_ports()
+        self._update_run_button()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -78,86 +85,129 @@ class OrchestratorWindow(QMainWindow):
     def _setup_ui(self) -> None:
         root = QWidget()
         self.setCentralWidget(root)
-        layout = QVBoxLayout(root)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        vbox = QVBoxLayout(root)
+        vbox.setContentsMargins(10, 10, 10, 10)
+        vbox.setSpacing(8)
 
-        layout.addWidget(self._build_config_group())
+        vbox.addWidget(self._build_devices_group())
+        vbox.addWidget(self._build_settings_group())
 
         self._run_btn = QPushButton("Run Capture")
-        self._run_btn.setFixedHeight(36)
+        self._run_btn.setFixedHeight(38)
+        self._run_btn.setToolTip("Start the startup-capture sequence on both devices")
         self._run_btn.clicked.connect(self._on_run)
-        layout.addWidget(self._run_btn)
+        vbox.addWidget(self._run_btn)
 
-        layout.addWidget(self._build_progress_group())
-        layout.addWidget(self._build_result_group())
+        vbox.addWidget(self._build_progress_group())
+        vbox.addWidget(self._build_result_group())
 
-    def _build_config_group(self) -> QGroupBox:
-        box = QGroupBox("Configuration")
+    # --- Devices group ---
+
+    def _build_devices_group(self) -> QGroupBox:
+        box = QGroupBox("Devices")
+        vbox = QVBoxLayout(box)
+
+        # Scan row
+        scan_row = QHBoxLayout()
+        self._scan_btn = QPushButton("Scan Ports")
+        self._scan_btn.setToolTip(
+            "Auto-detect ADE9000 (Arduino) and Distribution board\n"
+            "by probing all available COM ports"
+        )
+        self._scan_btn.clicked.connect(self._on_scan)
+
+        self._scan_status = QLabel("Not scanned")
+        self._scan_status.setStyleSheet(f"color: {_GREY};")
+
+        scan_row.addWidget(self._scan_btn)
+        scan_row.addWidget(self._scan_status, 1)
+        vbox.addLayout(scan_row)
+
+        # Device rows
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setHorizontalSpacing(10)
+
+        # ADE9000 row
+        ard_row = QHBoxLayout()
+        self._ard_dot  = QLabel(_DOT)
+        self._ard_dot.setStyleSheet(f"color: {_GREY}; font-size: 16px;")
+        self._ard_port = QComboBox()
+        self._ard_port.setMinimumWidth(120)
+        self._ard_port.setToolTip("COM port for ADE9000 Phase Monitor (Arduino Zero, 115200 baud)")
+        self._ard_port.currentTextChanged.connect(self._update_run_button)
+        ard_row.addWidget(self._ard_dot)
+        ard_row.addWidget(self._ard_port, 1)
+        form.addRow("ADE9000 (Arduino):", ard_row)
+
+        # Distribution row
+        dist_row = QHBoxLayout()
+        self._dist_dot  = QLabel(_DOT)
+        self._dist_dot.setStyleSheet(f"color: {_GREY}; font-size: 16px;")
+        self._dist_port = QComboBox()
+        self._dist_port.setMinimumWidth(120)
+        self._dist_port.setToolTip("COM port for Distribution Board (STM32G431, 57600 baud)")
+        self._dist_port.currentTextChanged.connect(self._update_run_button)
+        dist_row.addWidget(self._dist_dot)
+        dist_row.addWidget(self._dist_port, 1)
+        form.addRow("Distribution board:", dist_row)
+
+        vbox.addLayout(form)
+        return box
+
+    # --- Settings group ---
+
+    def _build_settings_group(self) -> QGroupBox:
+        box = QGroupBox("Capture Settings")
         form = QFormLayout(box)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        # Arduino port + Scan button (shared)
-        row_ard = QHBoxLayout()
-        self._ard_port = QComboBox()
-        self._ard_port.setMinimumWidth(150)
-        self._scan_btn = QPushButton("Scan")
-        self._scan_btn.setToolTip("Auto-detect ADE9000 and Distribution ports")
-        self._scan_btn.clicked.connect(self._on_scan)
-        self._scan_status = QLabel("")
-        row_ard.addWidget(self._ard_port, 1)
-        row_ard.addWidget(self._scan_btn)
-        row_ard.addWidget(self._scan_status)
-        form.addRow("Arduino port:", row_ard)
-
-        # Distribution port + Refresh (list only)
-        row_dist = QHBoxLayout()
-        self._dist_port = QComboBox()
-        self._dist_port.setMinimumWidth(150)
-        self._refresh_btn = QPushButton("Refresh")
-        self._refresh_btn.clicked.connect(self._refresh_ports)
-        row_dist.addWidget(self._dist_port, 1)
-        row_dist.addWidget(self._refresh_btn)
-        form.addRow("Distribution port:", row_dist)
+        form.setHorizontalSpacing(10)
 
         # Pre / Post
-        row_pp = QHBoxLayout()
+        pp_row = QHBoxLayout()
         self._pre_spin = QSpinBox()
         self._pre_spin.setRange(0, 2000)
         self._pre_spin.setValue(100)
+        self._pre_spin.setToolTip("Samples to capture before trigger (pre-trigger window)")
         self._post_spin = QSpinBox()
         self._post_spin.setRange(1, 2000)
         self._post_spin.setValue(400)
-        row_pp.addWidget(QLabel("Pre:"))
-        row_pp.addWidget(self._pre_spin)
-        row_pp.addSpacing(12)
-        row_pp.addWidget(QLabel("Post:"))
-        row_pp.addWidget(self._post_spin)
-        row_pp.addStretch()
-        form.addRow("Window:", row_pp)
+        self._post_spin.setToolTip("Samples to capture after trigger (post-trigger window)")
+        pp_row.addWidget(QLabel("Pre:"))
+        pp_row.addWidget(self._pre_spin)
+        pp_row.addSpacing(16)
+        pp_row.addWidget(QLabel("Post:"))
+        pp_row.addWidget(self._post_spin)
+        pp_row.addStretch()
+        form.addRow("Window:", pp_row)
 
         # Trigger mode
-        row_trig = QHBoxLayout()
+        trig_row = QHBoxLayout()
         self._radio_manual = QRadioButton("Manual")
+        self._radio_manual.setToolTip("Trigger is fired manually by this application")
         self._radio_dip    = QRadioButton("Dip")
+        self._radio_dip.setToolTip("ADE9000 triggers automatically on voltage dip")
         self._radio_manual.setChecked(True)
         self._dip_thresh = QDoubleSpinBox()
         self._dip_thresh.setRange(0.0, 500.0)
         self._dip_thresh.setValue(340.0)
         self._dip_thresh.setSuffix(" V")
         self._dip_thresh.setEnabled(False)
+        self._dip_thresh.setToolTip("Voltage threshold below which a dip trigger fires (V rms)")
         self._radio_manual.toggled.connect(
             lambda checked: self._dip_thresh.setEnabled(not checked)
         )
-        row_trig.addWidget(self._radio_manual)
-        row_trig.addWidget(self._radio_dip)
-        row_trig.addSpacing(12)
-        row_trig.addWidget(QLabel("Threshold:"))
-        row_trig.addWidget(self._dip_thresh)
-        row_trig.addStretch()
-        form.addRow("Trigger mode:", row_trig)
+        trig_row.addWidget(self._radio_manual)
+        trig_row.addWidget(self._radio_dip)
+        trig_row.addSpacing(16)
+        trig_row.addWidget(QLabel("Threshold:"))
+        trig_row.addWidget(self._dip_thresh)
+        trig_row.addStretch()
+        form.addRow("Trigger mode:", trig_row)
 
         return box
+
+    # --- Progress group ---
 
     def _build_progress_group(self) -> QGroupBox:
         box = QGroupBox("Progress")
@@ -168,9 +218,11 @@ class OrchestratorWindow(QMainWindow):
         mono = QFont("Consolas", 9)
         mono.setStyleHint(QFont.StyleHint.Monospace)
         self._log.setFont(mono)
-        self._log.setMinimumHeight(200)
+        self._log.setMinimumHeight(180)
         vl.addWidget(self._log)
         return box
+
+    # --- Result group ---
 
     def _build_result_group(self) -> QGroupBox:
         self._result_box = QGroupBox("Result")
@@ -186,51 +238,87 @@ class OrchestratorWindow(QMainWindow):
         return self._result_box
 
     # ------------------------------------------------------------------
-    # Slot handlers
+    # Port list helpers
     # ------------------------------------------------------------------
 
-    @Slot()
-    def _refresh_ports(self) -> None:
+    def _populate_all_ports(self) -> None:
+        """Fill both dropdowns with all available COM ports (pre-scan fallback)."""
         ports = sorted(p.device for p in serial.tools.list_ports.comports())
         for combo in (self._ard_port, self._dist_port):
-            current = combo.currentText()
+            cur = combo.currentText()
             combo.clear()
             combo.addItems(ports)
-            if current in ports:
-                combo.setCurrentText(current)
+            if cur in ports:
+                combo.setCurrentText(cur)
+
+    def _populate_from_scan(self, result: ScanResult) -> None:
+        """Fill each dropdown with only the ports of the right device type."""
+        self._ard_port.clear()
+        self._ard_port.addItems(result.arduino_ports)
+
+        self._dist_port.clear()
+        self._dist_port.addItems(result.dist_ports)
+
+    def _set_indicator(self, label: QLabel, found: bool) -> None:
+        colour = _GREEN if found else _RED
+        label.setStyleSheet(f"color: {colour}; font-size: 16px;")
+
+    def _update_run_button(self) -> None:
+        has_ard  = bool(self._ard_port.currentText())
+        has_dist = bool(self._dist_port.currentText())
+        self._run_btn.setEnabled(has_ard and has_dist)
+
+    # ------------------------------------------------------------------
+    # Scan slot
+    # ------------------------------------------------------------------
 
     @Slot()
     def _on_scan(self) -> None:
         self._scan_btn.setEnabled(False)
-        self._refresh_btn.setEnabled(False)
         self._run_btn.setEnabled(False)
-        self._scan_status.setText("Scanning...")
+        self._scan_status.setText("Scanning…")
+        self._scan_status.setStyleSheet(f"color: {_GREY};")
 
-        self._scan_worker = _ScanWorker(timeout=0.5, parent=self)
+        self._scan_worker = _ScanWorker(timeout=0.6, parent=self)
         self._scan_worker.finished.connect(self._on_scan_done)
         self._scan_worker.start()
 
     @Slot(object)
     def _on_scan_done(self, result: ScanResult) -> None:
+        self._scan_result = result
         self._scan_btn.setEnabled(True)
-        self._refresh_btn.setEnabled(True)
-        self._run_btn.setEnabled(True)
 
-        # Repopulate lists with current ports
-        self._refresh_ports()
+        self._populate_from_scan(result)
 
-        found = []
-        if result.arduino_port:
-            self._ard_port.setCurrentText(result.arduino_port)
-            found.append(f"ADE9000={result.arduino_port}")
-        if result.dist_port:
-            self._dist_port.setCurrentText(result.dist_port)
-            found.append(f"Dist={result.dist_port}")
+        self._set_indicator(self._ard_dot,  bool(result.arduino_ports))
+        self._set_indicator(self._dist_dot, bool(result.dist_ports))
 
-        if found:
-            self._scan_status.setText("  ".join(found))
+        parts = []
+        if result.arduino_ports:
+            parts.append(f"ADE9000 = {', '.join(result.arduino_ports)}")
+        if result.dist_ports:
+            parts.append(f"Distribution = {', '.join(result.dist_ports)}")
+
+        if result.complete:
+            self._scan_status.setText("  |  ".join(parts))
+            self._scan_status.setStyleSheet(f"color: {_GREEN};")
+        elif parts:
+            missing = []
+            if not result.arduino_ports:
+                missing.append("ADE9000 not found")
+            if not result.dist_ports:
+                missing.append("Distribution not found")
+            self._scan_status.setText("  |  ".join(parts + missing))
+            self._scan_status.setStyleSheet(f"color: {_RED};")
         else:
-            self._scan_status.setText("Nothing found")
+            self._scan_status.setText("No devices found")
+            self._scan_status.setStyleSheet(f"color: {_RED};")
+
+        self._update_run_button()
+
+    # ------------------------------------------------------------------
+    # Run slot
+    # ------------------------------------------------------------------
 
     @Slot()
     def _on_run(self) -> None:
@@ -239,7 +327,7 @@ class OrchestratorWindow(QMainWindow):
 
         if not ard_port or not dist_port:
             QMessageBox.warning(self, "No port selected",
-                                "Select both Arduino and Distribution ports.")
+                                "Both devices must be selected before running.")
             return
         if ard_port == dist_port:
             QMessageBox.warning(self, "Same port",
@@ -259,14 +347,16 @@ class OrchestratorWindow(QMainWindow):
             trigger_mode  = "dip" if self._radio_dip.isChecked() else "manual",
             dip_threshold = self._dip_thresh.value(),
         )
-        ade  = Ade9000Client()
-        dist = DistributionClient()
-
-        self._worker = OrchestratorWorker(cfg, ade, dist, parent=self)
+        self._worker = OrchestratorWorker(cfg, Ade9000Client(), DistributionClient(),
+                                          parent=self)
         self._worker.progress.connect(self._on_progress)
         self._worker.done.connect(self._on_done)
         self._worker.failed.connect(self._on_failed)
         self._worker.start()
+
+    # ------------------------------------------------------------------
+    # Worker callbacks
+    # ------------------------------------------------------------------
 
     @Slot(str, str)
     def _on_progress(self, phase: str, msg: str) -> None:
@@ -281,10 +371,10 @@ class OrchestratorWindow(QMainWindow):
         self._result_dir.setText(f"Session: {out}")
         self._result_metrics.setText(
             f"offset_ad = {session.offset_ad_ms:+.1f} ms  |  "
-            f"ADE9000 trigger tick = {done.trigger_tick_ms} ms  |  "
-            f"Dist trigger tick = {ds.trigger_tick} ms  |  "
-            f"Arduino samples = {len(session.arduino_samples)}  |  "
-            f"Dist samples = {len(session.dist_samples)}"
+            f"ADE9000 trigger = {done.trigger_tick_ms} ms  |  "
+            f"Dist trigger = {ds.trigger_tick} ms  |  "
+            f"Arduino {len(session.arduino_samples)} samples  |  "
+            f"Dist {len(session.dist_samples)} samples"
         )
         self._result_box.setVisible(True)
         self._log.appendPlainText("[DONE] session written")
