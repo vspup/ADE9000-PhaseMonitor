@@ -115,7 +115,7 @@ def _probe_dist(port: str, timeout: float) -> bool:
                         while sep in buf:
                             line_b, buf = buf.split(sep, 1)
                             line = line_b.decode("ascii", errors="ignore").strip().upper()
-                            if line.startswith(_STATUS_PREFIX):
+                            if _STATUS_PREFIX in line:
                                 return True
     except (serial.SerialException, OSError):
         pass

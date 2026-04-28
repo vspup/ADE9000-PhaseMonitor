@@ -147,6 +147,7 @@ class Orchestrator:
             self._abort_both()
             raise
         finally:
+            self._safe_wmode_monitor()
             self._ade.close()
             self._dist.close()
 
@@ -297,6 +298,13 @@ class Orchestrator:
         """Best-effort CAP ABORT on ADE9000; errors are swallowed."""
         try:
             self._ade.cap_abort()
+        except Exception:
+            pass
+
+    def _safe_wmode_monitor(self) -> None:
+        """Best-effort SET WMODE monitor so ADE9000 resumes telemetry after session."""
+        try:
+            self._ade.set_wmode_monitor()
         except Exception:
             pass
 

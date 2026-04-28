@@ -47,7 +47,8 @@ class Ade9000FirmwareError(Ade9000Error):
 class Ade9000Protocol:
     """Command strings and pure helpers for the ADE9000 JSON Lines protocol."""
 
-    CMD_SET_WMODE_CAPTURE = "SET WMODE capture"
+    CMD_SET_WMODE_CAPTURE  = "SET WMODE capture"
+    CMD_SET_WMODE_MONITOR  = "SET WMODE monitor"
     CMD_CAP_STATUS        = "CAP STATUS"
     CMD_CAP_READ          = "CAP READ"
     CMD_CAP_TRIGGER       = "CAP TRIGGER"
@@ -238,6 +239,16 @@ class Ade9000Client:
         if d.get("wmode") != "capture":
             raise Ade9000ProtocolError(
                 f"wmode ack carries wmode={d.get('wmode')!r}, expected 'capture'"
+            )
+
+    def set_wmode_monitor(self, timeout: float = 2.0) -> None:
+        """Switch back to monitor mode (restores autonomous telemetry stream)."""
+        d = self._expect_event(
+            Ade9000Protocol.CMD_SET_WMODE_MONITOR, "wmode", timeout
+        )
+        if d.get("wmode") != "monitor":
+            raise Ade9000ProtocolError(
+                f"wmode ack carries wmode={d.get('wmode')!r}, expected 'monitor'"
             )
 
     def sync_probe(

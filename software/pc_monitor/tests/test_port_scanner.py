@@ -140,6 +140,12 @@ class TestProbeDist(unittest.TestCase):
         data = b"PONG\r\n" + _status_reply()
         self.assertTrue(self._run(data))
 
+    def test_garbage_prefix_before_status_still_matches(self):
+        # RS-485 echo can prepend garbage bytes to the STATUS line;
+        # probe must still recognise it via substring match.
+        data = b"=9\x1dHSTATUS power=0 vbus=0 mode=CMD trig=0 capture=IDLE\r\n"
+        self.assertTrue(self._run(data))
+
 
 # ---------------------------------------------------------------------------
 # ScanResult
