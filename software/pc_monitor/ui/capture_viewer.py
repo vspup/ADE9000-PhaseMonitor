@@ -615,10 +615,13 @@ class CaptureViewDialog(QDialog):
     def __init__(self, session: CaptureSession, parent=None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setWindowTitle(f"Capture — {session.session_id}")
+        self.setWindowTitle(f"Capture — {session.session_id} · Analysis Mode")
+        # Caller is expected to call showMaximized(); the resize hint is a
+        # safe fallback for show() during isolated tests.
         screen = QGuiApplication.primaryScreen().availableGeometry()
-        self.resize(int(screen.width() * 0.9), int(screen.height() * 0.9))
+        self.resize(int(screen.width() * 0.95), int(screen.height() * 0.95))
 
+        self._session_id         = session.session_id
         self._x_sync_in_progress = False
         self._sync_cursor_on     = True
         self._point_markers_on   = False
@@ -672,6 +675,7 @@ class CaptureViewDialog(QDialog):
         main.setContentsMargins(6, 6, 6, 6)
         main.setSpacing(4)
 
+        main.addWidget(self._build_header())
         main.addWidget(self._build_top_bar())
 
         self._row_v = _PlotRow(
@@ -726,6 +730,47 @@ class CaptureViewDialog(QDialog):
             ),
         ]
 
+    # ---- Header (Back / Fullscreen / title / Reset View) ----
+
+    def _build_header(self) -> QWidget:
+        bar = QFrame()
+        bar.setFrameShape(QFrame.Shape.StyledPanel)
+        bar.setStyleSheet(
+            "QFrame { background: #2b3340; }"
+            "QLabel { color: #e8eaed; }"
+            "QPushButton { color: #e8eaed; background: #3a4150; "
+            "  border: 1px solid #4a5160; padding: 4px 12px; border-radius: 3px; }"
+            "QPushButton:hover { background: #4a5160; }"
+            "QPushButton:checked { background: #1976d2; border-color: #1976d2; }"
+        )
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(8, 5, 8, 5)
+        h.setSpacing(8)
+
+        self._back_btn = QPushButton("← Back")
+        self._back_btn.setToolTip("Close the viewer and return to the main window (Esc)")
+        self._back_btn.clicked.connect(self._on_back)
+        h.addWidget(self._back_btn)
+
+        self._fullscreen_btn = QPushButton("Fullscreen")
+        self._fullscreen_btn.setCheckable(True)
+        self._fullscreen_btn.setShortcut("F11")
+        self._fullscreen_btn.setToolTip("Toggle full-screen (F11)")
+        self._fullscreen_btn.toggled.connect(self._on_fullscreen_toggled)
+        h.addWidget(self._fullscreen_btn)
+
+        h.addStretch(1)
+        title = QLabel(f"Capture — {self._session_id}  ·  Analysis Mode")
+        title.setStyleSheet("font-weight: 600; font-size: 14px; color: #e8eaed;")
+        h.addWidget(title)
+        h.addStretch(1)
+
+        self._reset_btn = QPushButton("Reset View")
+        self._reset_btn.setToolTip("Auto-scale X and Y on every plot")
+        self._reset_btn.clicked.connect(self._on_reset_view)
+        h.addWidget(self._reset_btn)
+        return bar
+
     # ---- Top bar (split into two rows) ----
 
     def _build_top_bar(self) -> QWidget:
@@ -773,11 +818,6 @@ class CaptureViewDialog(QDialog):
         h.addWidget(self._point_markers_cb)
 
         h.addStretch(1)
-
-        self._reset_btn = QPushButton("Reset View")
-        self._reset_btn.setToolTip("Auto-scale X and Y on every plot")
-        self._reset_btn.clicked.connect(self._on_reset_view)
-        h.addWidget(self._reset_btn)
         return h
 
     def _build_channels_row(self) -> QHBoxLayout:
@@ -988,6 +1028,19 @@ class CaptureViewDialog(QDialog):
         self._compute_initial_xlim()
         for row in self._all_rows():
             row.auto_y()
+
+    # ---------------- Header actions ----------------
+
+    def _on_back(self) -> None:
+        self.close()
+
+    def _on_fullscreen_toggled(self, on: bool) -> None:
+        # Maximized = title bar visible, OS chrome intact;
+        # FullScreen   = covers the whole display (kiosk-style).
+        if on:
+            self.showFullScreen()
+        else:
+            self.showMaximized()
 
     # ---------------- Focus mode ----------------
 

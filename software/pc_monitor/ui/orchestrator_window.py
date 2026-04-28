@@ -480,7 +480,17 @@ class OrchestratorWindow(QMainWindow):
         if self._last_session is None:
             return
         dlg = CaptureViewDialog(self._last_session, parent=self)
-        dlg.show()
+        # The viewer takes over the screen; the main window is hidden until
+        # the user clicks ← Back (or closes the viewer any other way).
+        dlg.finished.connect(self._on_viewer_closed)
+        self.hide()
+        dlg.showMaximized()
+
+    @Slot()
+    def _on_viewer_closed(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     @Slot(str, dict)
     def _on_failed(self, msg: str, info: dict) -> None:
