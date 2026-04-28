@@ -134,6 +134,11 @@ def _probe_dist(port: str, timeout: float) -> bool:
             bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE, timeout=0.05,
         ) as s:
+            # Windows USB-RS485 adapters need a brief electrical settle
+            # after open or the first TX is silently dropped — exactly the
+            # symptom that made the scanner miss Distribution intermittently
+            # while db_tool (with seconds of human delay) always worked.
+            time.sleep(0.05)
             s.reset_input_buffer()
             s.write(b"STATUS\r\n")
             deadline = time.monotonic() + timeout
