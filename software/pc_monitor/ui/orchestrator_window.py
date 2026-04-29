@@ -9,6 +9,7 @@ Layout:
 """
 from __future__ import annotations
 
+import html
 from pathlib import Path
 from typing import Optional
 
@@ -47,6 +48,15 @@ _GREEN = "#4caf50"
 _RED   = "#f44336"
 _GREY  = "#888888"
 _DOT   = "●"
+
+# Log line colours — muted on the default light QPlainTextEdit background.
+# Per-device tagging done by substring match on the message body, since the
+# orchestrator's progress tuple is (phase, msg) and one message generally
+# touches one device only. Mixed/neutral lines stay default-coloured.
+_LOG_COL_ARDUINO      = "#a08e3c"   # muted ochre
+_LOG_COL_DISTRIBUTION = "#3c8aa0"   # muted teal
+_LOG_COL_DONE         = "#4caf50"
+_LOG_COL_ERROR        = "#d44"
 
 # Heartbeat: COM-port enumeration tick between sessions, so the indicator
 # dots flip red within ~2 s if the user yanks a USB cable. Cheap (no I/O,
@@ -123,6 +133,16 @@ class OrchestratorWindow(QMainWindow):
         self._reset_worker: Optional[_ResetWorker]       = None
         self._scan_result:  Optional[ScanResult]         = None
         self._last_session: Optional[CaptureSession]     = None
+
+        # Verified = "we have proof this port is the right device".
+        # Set by Scan probe success or by orchestrator's CONNECT phase
+        # (or successful Reset Distribution); cleared when the user
+        # picks a different port via the dropdown. Heartbeat keeps the
+        # dot grey until verified, even if the port is enumerable —
+        # config-restored ports must not look "connected" before any
+        # actual handshake has happened.
+        self._ard_verified  = False
+        self._dist_verified = False
 
         self._setup_ui()
         self._populate_all_ports()
@@ -203,6 +223,7 @@ class OrchestratorWindow(QMainWindow):
         self._ard_port.setMinimumWidth(120)
         self._ard_port.setToolTip("COM port for ADE9000 Phase Monitor (Arduino Zero, 115200 baud)")
         self._ard_port.currentTextChanged.connect(self._update_run_button)
+        self._ard_port.currentTextChanged.connect(self._on_ard_port_changed)
         ard_row.addWidget(self._ard_dot)
         ard_row.addWidget(self._ard_port, 1)
         form.addRow("ADE9000 (Arduino):", ard_row)
@@ -215,6 +236,7 @@ class OrchestratorWindow(QMainWindow):
         self._dist_port.setMinimumWidth(120)
         self._dist_port.setToolTip("COM port for Distribution Board (STM32G431, 57600 baud)")
         self._dist_port.currentTextChanged.connect(self._update_run_button)
+        self._dist_port.currentTextChanged.connect(self._on_dist_port_changed)
         dist_row.addWidget(self._dist_dot)
         dist_row.addWidget(self._dist_port, 1)
         form.addRow("Distribution board:", dist_row)
@@ -384,6 +406,20 @@ class OrchestratorWindow(QMainWindow):
     def _set_indicator_colour(self, label: QLabel, colour: str) -> None:
         label.setStyleSheet(f"color: {colour}; font-size: 16px;")
 
+    @Slot(str)
+    def _on_ard_port_changed(self, _text: str) -> None:
+        """User picked a different port (or combo cleared) → no longer verified.
+
+        Heartbeat repaints the dot grey on the next tick; programmatic combo
+        changes (Scan / population from config) re-arm verified after the
+        port refill, so the user-visible behaviour stays clean.
+        """
+        self._ard_verified = False
+
+    @Slot(str)
+    def _on_dist_port_changed(self, _text: str) -> None:
+        self._dist_verified = False
+
     def _update_run_button(self) -> None:
         has_ard  = bool(self._ard_port.currentText())
         has_dist = bool(self._dist_port.currentText())
@@ -402,10 +438,17 @@ class OrchestratorWindow(QMainWindow):
         signal-cause attribution clean (a colour flip during a session would
         otherwise be misleading: the port is open, just not in our list).
 
-        Detects only the cable-yank case; an unresponsive but still-enumerated
-        device shows green here. A real PING-based liveness check would require
-        opening the port, which would clash with concurrent worker access — not
-        worth the complexity for a 2 s tick.
+        Three colours, ordered from "no answer yet" to "live":
+          grey   — combo empty OR not verified (port may exist in OS but we
+                   have not handshaked with the device on it yet)
+          green  — verified AND port currently enumerable
+          red    — verified AND port has gone missing (cable yank etc.)
+
+        Verification is set by:
+          * Scan probe success (real PING/MODE CMD round-trip).
+          * Orchestrator's CONNECT phase (port opened, handshake passed).
+          * Successful Reset Distribution.
+        It is cleared when the user picks a different port from the combo.
         """
         if self._worker is not None and self._worker.isRunning():
             return
@@ -413,12 +456,12 @@ class OrchestratorWindow(QMainWindow):
             return
 
         available = {p.device for p in serial.tools.list_ports.comports()}
-        for dot, combo in (
-            (self._ard_dot,  self._ard_port),
-            (self._dist_dot, self._dist_port),
+        for dot, combo, verified in (
+            (self._ard_dot,  self._ard_port,  self._ard_verified),
+            (self._dist_dot, self._dist_port, self._dist_verified),
         ):
             port = combo.currentText()
-            if not port:
+            if not port or not verified:
                 self._set_indicator_colour(dot, _GREY)
             elif port in available:
                 self._set_indicator_colour(dot, _GREEN)
@@ -445,7 +488,13 @@ class OrchestratorWindow(QMainWindow):
         self._scan_result = result
         self._scan_btn.setEnabled(True)
 
+        # _populate_from_scan triggers currentTextChanged on the combos,
+        # which clears verified via the slots. Re-arm afterwards based on
+        # the probe outcome — Scan is real I/O (PING / MODE CMD), so a
+        # found device legitimately deserves green.
         self._populate_from_scan(result)
+        self._ard_verified  = bool(result.arduino_ports)
+        self._dist_verified = bool(result.dist_ports)
 
         self._set_indicator(self._ard_dot,  bool(result.arduino_ports))
         self._set_indicator(self._dist_dot, bool(result.dist_ports))
@@ -516,9 +565,41 @@ class OrchestratorWindow(QMainWindow):
     # Worker callbacks
     # ------------------------------------------------------------------
 
+    def _append_log(self, prefix: str, msg: str) -> None:
+        """Append a coloured log line. Colour is picked from the message:
+        per-device messages get muted ochre (Arduino) or teal (Distribution),
+        DONE green, ERROR/failed red, everything else default. HTML is
+        escaped so unusual characters in error messages don't break layout.
+        """
+        if prefix.startswith("ERROR") or prefix == "FAIL":
+            colour = _LOG_COL_ERROR
+        elif prefix == "DONE":
+            colour = _LOG_COL_DONE
+        elif "ADE9000" in msg or "Arduino" in msg:
+            colour = _LOG_COL_ARDUINO
+        elif "Distribution" in msg or prefix == "RESET":
+            colour = _LOG_COL_DISTRIBUTION
+        else:
+            colour = ""
+        text = html.escape(f"[{prefix}] {msg}")
+        if colour:
+            self._log.appendHtml(f'<span style="color:{colour}">{text}</span>')
+        else:
+            self._log.appendHtml(text)
+
     @Slot(str, str)
     def _on_progress(self, phase: str, msg: str) -> None:
-        self._log.appendPlainText(f"[{phase}] {msg}")
+        # Successful per-device CONNECT messages from Orchestrator look like
+        # "opening ADE9000 on COM…", "opening Distribution on COM…",
+        # "MODE CMD → Distribution", etc. Treat the first sighting as proof
+        # that the corresponding handshake passed — flips the dot green via
+        # the next heartbeat tick.
+        if phase == "CONNECT":
+            if not self._ard_verified  and ("ADE9000"      in msg or "Arduino" in msg):
+                self._ard_verified  = True
+            if not self._dist_verified and "Distribution" in msg:
+                self._dist_verified = True
+        self._append_log(phase, msg)
 
     @Slot(object)
     def _on_done(self, session: CaptureSession) -> None:
@@ -536,7 +617,7 @@ class OrchestratorWindow(QMainWindow):
             f"Dist {len(session.dist_samples)} samples"
         )
         self._result_box.setVisible(True)
-        self._log.appendPlainText("[DONE] session written")
+        self._append_log("DONE", "session written")
         self._run_btn.setEnabled(True)
         self._scan_btn.setEnabled(True)
 
@@ -592,7 +673,7 @@ class OrchestratorWindow(QMainWindow):
             return
         self._reset_btn.setEnabled(False)
         self._run_btn.setEnabled(False)
-        self._log.appendPlainText(f"[RESET] re-arming Distribution on {port}")
+        self._append_log("RESET", f"re-arming Distribution on {port}")
         self._reset_worker = _ResetWorker(port, parent=self)
         self._reset_worker.finished.connect(self._on_reset_done)
         self._reset_worker.start()
@@ -602,10 +683,14 @@ class OrchestratorWindow(QMainWindow):
         self._reset_btn.setEnabled(True)
         self._run_btn.setEnabled(True)
         if ok:
-            self._log.appendPlainText(f"[RESET] {msg}")
+            self._append_log("RESET", msg)
             self._error_box.setVisible(False)
+            # Reset worker successfully MODE CMD → CAP ABORT → ARM'd the
+            # board, which is at least as strong a verification as a Scan
+            # probe — the FSM made a full round trip on this port.
+            self._dist_verified = True
         else:
-            self._log.appendPlainText(f"[RESET] failed: {msg}")
+            self._append_log("RESET", f"failed: {msg}")
             self._error_title.setText("Reset Distribution failed")
             self._error_detail.setText(msg)
             self._error_box.setVisible(True)
@@ -624,8 +709,8 @@ class OrchestratorWindow(QMainWindow):
         if device:
             prefix_parts.append(device)
         prefix = "][".join(prefix_parts)
-        cmd_suffix = f" (CMD={command})" if command else ""
-        self._log.appendPlainText(f"[{prefix}]{cmd_suffix} {msg}")
+        cmd_suffix = f"(CMD={command}) " if command else ""
+        self._append_log(prefix, f"{cmd_suffix}{msg}")
 
         # Persistent panel: title summarises device + command, body is the message.
         if device and command:
