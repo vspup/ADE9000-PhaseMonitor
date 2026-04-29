@@ -44,6 +44,11 @@ from typing import Optional
 import serial
 import serial.tools.list_ports
 
+from core.distribution_client import (
+    CHANNEL_KEYS,
+    DistributionProtocol as _CoreProtocol,
+)
+
 try:
     import matplotlib
     matplotlib.use("TkAgg")
@@ -193,30 +198,26 @@ class SerialTransport:
 # Protocol Layer
 # ---------------------------------------------------------------------------
 
-CHANNEL_KEYS = [
-    "u17_ch0", "u17_ch1", "u17_ch2", "u17_ch3",
-    "u18_ch0", "u18_ch1", "u18_ch2", "u18_ch3",
-]
+class DistributionProtocol(_CoreProtocol):
+    """Diagnostic-tool extensions over the orchestrator's protocol.
 
+    Inherits all command strings and parsers from
+    `core.distribution_client.DistributionProtocol` (the single source
+    of truth used by the orchestrator). This subclass adds STREAM-mode
+    commands and EVT body classifiers that only db_tool needs — the
+    orchestrator never enables MODE STREAM and treats EVT bodies as
+    opaque strings.
 
-class DistributionProtocol:
-    """Command strings and pure parsers for Distribution Board text protocol."""
+    Side-effect of the dedup: db_tool now picks up core's lenient
+    CAP STATUS regex (no required `CAP STATUS` prefix, optional
+    `trigger_tick`) and gains cap_abort / sync helpers it didn't carry.
+    `_apply_cap_status` only reads `state` and `samples`, so the
+    optional-trigger-tick change is invisible to existing call sites.
+    """
 
-    CMD_PING = "PING"
-    CMD_STATUS = "STATUS"
-    CMD_START = "START"
-    CMD_ARM = "ARM"
-    CMD_MODE_CMD = "MODE CMD"
     CMD_MODE_STREAM = "MODE STREAM"
-    CMD_STREAM_ON = "STREAM ON"
-    CMD_STREAM_OFF = "STREAM OFF"
-    CMD_CAP_STATUS = "CAP STATUS"
-    CMD_EVENTS_ON = "EVENTS ON"
-    CMD_EVENTS_OFF = "EVENTS OFF"
-
-    @staticmethod
-    def cmd_cap_read(offset: int, count: int) -> str:
-        return f"CAP READ {offset} {count}"
+    CMD_STREAM_ON   = "STREAM ON"
+    CMD_STREAM_OFF  = "STREAM OFF"
 
     _STREAM_RE = re.compile(
         r"U17:\s*CH0=(?P<u17_ch0>-?\d+(?:\.\d+)?)V"
@@ -230,37 +231,8 @@ class DistributionProtocol:
         re.IGNORECASE,
     )
 
-    _STATUS_RE = re.compile(
-        r"STATUS\s+power=(?P<power>\d+)\s+vbus=(?P<vbus>\d+)"
-        r"\s+mode=(?P<mode>\w+)\s+trig=(?P<trig>\d+)",
-        re.IGNORECASE,
-    )
-
-    _CAP_STATUS_RE = re.compile(
-        r"CAP\s+STATUS\s+state=(?P<state>\w+)"
-        r"\s+samples=(?P<samples>\d+)"
-        r"\s+trigger_idx=(?P<trigger_idx>-?\d+)"
-        r"\s+sample_period_ms=(?P<sample_period_ms>\d+)"
-        r"\s+channels=(?P<channels>\d+)"
-        r"\s+trigger_tick=(?P<trigger_tick>\d+)",
-        re.IGNORECASE,
-    )
-
-    _CAP_SAMPLE_RE = re.compile(
-        r"^(?P<idx>\d+)"
-        + r"".join(rf"\s+(?P<ch{i}>[0-9A-Fa-f]{{4}})" for i in range(8))
-        + r"\s*$"
-    )
-
-    _CAP_DONE_RE = re.compile(
-        r"CAP\s+READ\s+done\s+count=(?P<count>\d+)",
-        re.IGNORECASE,
-    )
-
-    # Phase 5 async events. Generic prefix is matched first; specific bodies
-    # are classified against the body regexes below for future-proof handling
-    # (unknown body → still logged as EVT, not swallowed).
-    _EVT_PREFIX_RE = re.compile(r"^EVT:\s*(?P<body>.*)$", re.IGNORECASE)
+    # EVT body classifiers — surfaced specially in the log pane.
+    # Generic EVT prefix parsing comes from the core class.
     _EVT_VBUS_BLOCK_RE = re.compile(r"^vbus_block\s*$", re.IGNORECASE)
     _EVT_EVENTS_DROPPED_RE = re.compile(
         r"^events_dropped=(?P<n>\d+)\s*$", re.IGNORECASE
@@ -278,67 +250,8 @@ class DistributionProtocol:
             return None
 
     @staticmethod
-    def parse_status(line: str) -> Optional[dict]:
-        """Return dict with power/vbus/mode/trig if line is a STATUS reply, else None."""
-        m = DistributionProtocol._STATUS_RE.search(line)
-        if not m:
-            return None
-        return {
-            "power": int(m.group("power")),
-            "vbus": int(m.group("vbus")),
-            "mode": m.group("mode").upper(),
-            "trig": int(m.group("trig")),
-        }
-
-    @staticmethod
-    def parse_cap_status(line: str) -> Optional[dict]:
-        """Parse `CAP STATUS state=... samples=... trigger_idx=... sample_period_ms=... channels=... trigger_tick=...`."""
-        m = DistributionProtocol._CAP_STATUS_RE.search(line)
-        if not m:
-            return None
-        return {
-            "state": m.group("state").upper(),
-            "samples": int(m.group("samples")),
-            "trigger_idx": int(m.group("trigger_idx")),
-            "sample_period_ms": int(m.group("sample_period_ms")),
-            "channels": int(m.group("channels")),
-            "trigger_tick": int(m.group("trigger_tick")),
-        }
-
-    @staticmethod
-    def parse_cap_sample(line: str) -> Optional[tuple[int, list[int], list[str]]]:
-        """Parse `NNNNNN HHHH HHHH ...x8` → (idx, [int16]*8, [hex_uppercase]*8)."""
-        m = DistributionProtocol._CAP_SAMPLE_RE.match(line)
-        if not m:
-            return None
-        idx = int(m.group("idx"))
-        hex_vals = [m.group(f"ch{i}").upper() for i in range(8)]
-        int_vals = []
-        for h in hex_vals:
-            v = int(h, 16)
-            if v >= 0x8000:
-                v -= 0x10000
-            int_vals.append(v)
-        return idx, int_vals, hex_vals
-
-    @staticmethod
-    def parse_cap_done(line: str) -> Optional[int]:
-        """Return sample count if line is `CAP READ done count=N`, else None."""
-        m = DistributionProtocol._CAP_DONE_RE.search(line)
-        return int(m.group("count")) if m else None
-
-    @staticmethod
-    def parse_evt(line: str) -> Optional[str]:
-        """Return the trimmed body if `line` is an `EVT: <body>` notification,
-        else None. Unknown bodies still return a string — only the prefix is
-        required to match (forward compatibility with future EVT kinds)."""
-        m = DistributionProtocol._EVT_PREFIX_RE.match(line)
-        return m.group("body").strip() if m else None
-
-    @staticmethod
     def parse_evt_events_dropped(body: str) -> Optional[int]:
-        """Given an EVT body (already stripped of the `EVT: ` prefix), return
-        the drop count if it matches `events_dropped=<N>`, else None."""
+        """Return drop count if EVT body matches `events_dropped=<N>`, else None."""
         m = DistributionProtocol._EVT_EVENTS_DROPPED_RE.match(body)
         return int(m.group("n")) if m else None
 
