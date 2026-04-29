@@ -16,6 +16,7 @@ from core.distribution_client import (
     StartAlreadyOnError,
     VbusBlockError,
 )
+from core.sync_probe import SyncResult
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +263,57 @@ class TestCmdCapRead(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# DistributionClient — ping / ping_probe
+# DistributionProtocol — parse_sync
+# ---------------------------------------------------------------------------
+
+class TestParseSync(unittest.TestCase):
+    def test_clean_reply(self):
+        self.assertEqual(
+            DistributionProtocol.parse_sync("SYNC ok seq=7 tick=123456"),
+            (7, 123456),
+        )
+
+    def test_case_insensitive(self):
+        self.assertEqual(
+            DistributionProtocol.parse_sync("sync ok SEQ=1 TICK=42"),
+            (1, 42),
+        )
+
+    def test_corrupted_prefix(self):
+        # RS-485 half-duplex switching can mangle the first bytes; the
+        # seq/tick fields survive and are what the parser keys on.
+        self.assertEqual(
+            DistributionProtocol.parse_sync("xX@k seq=12 tick=99000"),
+            (12, 99000),
+        )
+
+    def test_zero_values(self):
+        self.assertEqual(
+            DistributionProtocol.parse_sync("SYNC ok seq=0 tick=0"),
+            (0, 0),
+        )
+
+    def test_missing_tick_returns_none(self):
+        self.assertIsNone(DistributionProtocol.parse_sync("SYNC ok seq=1"))
+
+    def test_garbage_returns_none(self):
+        self.assertIsNone(DistributionProtocol.parse_sync("PONG"))
+        self.assertIsNone(DistributionProtocol.parse_sync(""))
+        self.assertIsNone(DistributionProtocol.parse_sync("SYNC err_range"))
+
+
+# ---------------------------------------------------------------------------
+# DistributionProtocol — cmd_sync
+# ---------------------------------------------------------------------------
+
+class TestCmdSync(unittest.TestCase):
+    def test_format(self):
+        self.assertEqual(DistributionProtocol.cmd_sync(0),  "SYNC 0")
+        self.assertEqual(DistributionProtocol.cmd_sync(42), "SYNC 42")
+
+
+# ---------------------------------------------------------------------------
+# DistributionClient — ping
 # ---------------------------------------------------------------------------
 
 class TestPing(unittest.TestCase):
@@ -296,19 +347,65 @@ class TestPing(unittest.TestCase):
         self.assertIn("tCtCtCERR unknown", str(cm.exception))
 
 
-class TestPingProbe(unittest.TestCase):
-    def test_median_of_three(self):
+class TestSyncProbe(unittest.TestCase):
+    @staticmethod
+    def _reply(seq: int, tick: int = 1000) -> str:
+        return f"SYNC ok seq={seq} tick={tick + seq}"
+
+    def test_returns_sync_result(self):
         t = _FakeTransport()
-        for _ in range(3):
-            t.push_replies("PONG")
-        rtt = DistributionClient(t).ping_probe(n=3, timeout=1.0)
-        self.assertGreaterEqual(rtt, 0.0)
-        self.assertEqual(t.sent.count("PING"), 3)
+        for seq in range(1, 4):
+            t.push_replies(self._reply(seq))
+        result = DistributionClient(t).sync_probe(n=3, best_k=2, probe_timeout=1.0)
+        self.assertIsInstance(result, SyncResult)
+        self.assertEqual(result.n_samples, 3)
+        self.assertEqual(result.n_used,    2)
+
+    def test_command_format(self):
+        t = _FakeTransport()
+        for seq in range(1, 4):
+            t.push_replies(self._reply(seq))
+        DistributionClient(t).sync_probe(n=3, probe_timeout=1.0)
+        self.assertEqual(t.sent, ["SYNC 1", "SYNC 2", "SYNC 3"])
+
+    def test_evt_lines_sidelined(self):
+        t = _FakeTransport()
+        t.push_replies("EVT: vbus_block tick=100", self._reply(1))
+        t.push_replies(self._reply(2))
+        client = DistributionClient(t)
+        client.sync_probe(n=2, probe_timeout=1.0)
+        evts = client.take_events()
+        self.assertEqual(len(evts), 1)
+        self.assertIn("vbus_block", evts[0])
+
+    def test_stale_seq_skipped(self):
+        # Reply seq doesn't match — probe scans past it until the deadline.
+        # With only one stale reply per probe the result list is empty.
+        t = _FakeTransport()
+        t.push_replies("SYNC ok seq=99 tick=1234")   # wrong seq for probe 1
+        t.push_replies("SYNC ok seq=99 tick=1235")   # wrong seq for probe 2
+        with self.assertRaises(DistributionTimeout):
+            DistributionClient(t).sync_probe(n=2, probe_timeout=0.05)
+
+    def test_garbled_reply_skipped(self):
+        # A line that doesn't carry seq=/tick= is dropped; probe times out
+        # and contributes no sample, so all-garble → DistributionTimeout.
+        t = _FakeTransport()
+        t.push_replies("PSk")
+        t.push_replies("PSk")
+        with self.assertRaises(DistributionTimeout):
+            DistributionClient(t).sync_probe(n=2, probe_timeout=0.05)
 
     def test_all_timeout_raises(self):
         t = _FakeTransport()
         with self.assertRaises(DistributionTimeout):
-            DistributionClient(t).ping_probe(n=2, timeout=0.05)
+            DistributionClient(t).sync_probe(n=2, probe_timeout=0.05)
+
+    def test_corrupted_prefix_still_parses(self):
+        t = _FakeTransport()
+        t.push_replies("xX@k seq=1 tick=1001")
+        result = DistributionClient(t).sync_probe(n=1, probe_timeout=1.0)
+        self.assertEqual(result.n_samples, 1)
 
 
 # ---------------------------------------------------------------------------

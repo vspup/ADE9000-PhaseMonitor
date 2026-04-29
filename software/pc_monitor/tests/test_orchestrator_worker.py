@@ -61,7 +61,8 @@ def _fake_session(output_dir: str) -> CaptureSession:
         dist_status     = DistCapStatus(state="READY", samples=1, trigger_idx=0,
                                         sample_period_ms=25, channels=8,
                                         trigger_tick=99000),
-        dist_rtt_ms     = 4.0,
+        dist_sync       = SyncResult(offset_ms=2.0, rtt_ms_median=4.0,
+                                     rtt_ms_best=3.0, n_samples=25, n_used=8),
         dist_port       = "COM7",
         offset_ad_ms    = 98.0,
     )

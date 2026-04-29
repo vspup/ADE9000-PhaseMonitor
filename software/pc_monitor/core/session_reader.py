@@ -5,7 +5,9 @@ so the capture viewer can be opened on past runs without re-running hardware.
 
 Lossy on fields that session.json does not persist (DistCapStatus.state,
 SyncResult.rtt_ms_median / n_used, CaptureDone.trigger_index): these are
-filled with sensible defaults that keep the viewer happy.
+filled with sensible defaults that keep the viewer happy. Schema v1
+sessions (no Distribution sync block; only legacy `rtt_ms`) are read
+with offset_ms defaulted to 0 — no clock-offset estimate available.
 
 Usage:
     sess = read_session(Path("captures/2026-04-28T18-17-52"))
@@ -115,13 +117,17 @@ def read_session(session_dir: Path) -> CaptureSession:
         trigger_index    = 0,
     )
 
-    rtt_best = float(a.get("rtt_ms_best", 0.0))
-    arduino_sync = SyncResult(
-        offset_ms     = float(a.get("offset_ms", 0.0)),
-        rtt_ms_median = rtt_best,
-        rtt_ms_best   = rtt_best,
-        n_samples     = int(a.get("n_sync_samples", 0)),
-        n_used        = int(a.get("n_sync_samples", 0)),
+    arduino_sync = _read_sync_block(a)
+    # Legacy schema v1 only carried `rtt_ms` (median PING RTT) on Distribution
+    # and no offset/sync fields. Reconstruct a SyncResult so the dataclass
+    # contract holds: offset is unknown → 0; rtt_ms_best falls back to the
+    # legacy rtt_ms; n_sync_samples is unknown → 0.
+    dist_sync = _read_sync_block(d) if "offset_ms" in d else SyncResult(
+        offset_ms     = 0.0,
+        rtt_ms_median = float(d.get("rtt_ms", 0.0)),
+        rtt_ms_best   = float(d.get("rtt_ms", 0.0)),
+        n_samples     = 0,
+        n_used        = 0,
     )
 
     dist_status = DistCapStatus(
@@ -143,9 +149,27 @@ def read_session(session_dir: Path) -> CaptureSession:
         arduino_port    = cfg.arduino_port,
         dist_samples    = dist_samples,
         dist_status     = dist_status,
-        dist_rtt_ms     = float(d.get("rtt_ms", 0.0)),
+        dist_sync       = dist_sync,
         dist_port       = cfg.dist_port,
         offset_ad_ms    = float(doc.get("offset_ad_ms", 0.0)),
+    )
+
+
+def _read_sync_block(block: dict) -> SyncResult:
+    """Reconstruct a SyncResult from a session.json device block.
+
+    `rtt_ms_median` and `n_used` are not persisted; mirror them from
+    `rtt_ms_best` / `n_sync_samples` so downstream code that touches
+    those fields (read-only) still gets sensible numbers.
+    """
+    rtt_best = float(block.get("rtt_ms_best", 0.0))
+    n        = int(block.get("n_sync_samples", 0))
+    return SyncResult(
+        offset_ms     = float(block.get("offset_ms", 0.0)),
+        rtt_ms_median = rtt_best,
+        rtt_ms_best   = rtt_best,
+        n_samples     = n,
+        n_used        = n,
     )
 
 

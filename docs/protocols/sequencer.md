@@ -126,9 +126,8 @@ offset = device_tick_ms − (t_send_pc + t_recv_pc) / 2
 PC collects N=25 probes, sorts by RTT, takes median of cleanest K=8.
 
 ADE9000: `SYNC <seq>` → `{"status":"ok","event":"sync","seq":<n>,"tick_ms":<t>}`.
-Distribution: no dedicated sync command today — use the round-trip of
-`PING` → reply with `STATUS` timestamp as approximation, and plan a
-proper `SYNC` command as follow-up. See §7.
+Distribution: `SYNC <seq>` → `SYNC ok seq=<n> tick=<t>` (text), where
+`tick` is `HAL_GetTick()`. Same N=25 / best K=8 procedure on both sides.
 
 The cross-device offset is:
 
@@ -155,8 +154,8 @@ sequenceDiagram
     PC->>D: open /dev/ttyUSB*, MODE CMD (default)
     PC->>A: SYNC × N (median offset)
     A-->>PC: sync replies
-    PC->>D: PING × N (round-trip only)
-    D-->>PC: pong replies
+    PC->>D: SYNC × N (median offset)
+    D-->>PC: sync replies
 
     Note over PC,D: Phase 1 — arm
     PC->>A: CAP SET <pre> <post>
@@ -197,9 +196,8 @@ Steps in detail:
    `firmware-pc.md` connect handshake). Distribution starts in
    `MODE CMD` silent; no handshake needed.
 2. **Sync.** Run 25 `SYNC` probes on ADE9000, take median-of-8. Do the
-   same with `PING` on Distribution until a proper SYNC command ships
-   (§7). Store `offset_arduino`, `offset_distribution`, derive
-   `offset_ad`.
+   same with `SYNC <seq>` on Distribution. Store `offset_arduino`,
+   `offset_distribution`, derive `offset_ad`.
 3. **Configure pre/post on ADE9000.** Send `CAP SET <pre> <post>`
    (`pre+post ≤ 500`). Distribution pre/post is fixed in firmware.
 4. **Arm.** `CAP ARM manual` on ADE9000, then `ARM` on Distribution.
@@ -320,6 +318,8 @@ Single source of truth for cross-device correlation:
       "post": 250,
       "trigger_index": 0,
       "offset_ms": 9023.1,
+      "rtt_ms_best": 3.2,
+      "n_sync_samples": 25,
       "channels": 8
     }
   },
@@ -367,10 +367,6 @@ land together, or nothing does.
 
 These are not blockers for PC orchestration v1, but need tracking:
 
-- **Proper SYNC on Distribution.** `PING` round-trip is coarse. A
-  dedicated `SYNC <seq>` → `SYNC ok seq=<n> tick=<t>` command on
-  UART1 would match ADE9000's method 1:1. Scope: Distribution FW
-  follow-up PR.
 - **Distribution async `cap_done`.** Today PC polls `CAP STATUS`.
   An EVT-channel `EVT: cap_ready` would remove the poll. Scope:
   Phase 5 adjacent work.

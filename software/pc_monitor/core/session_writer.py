@@ -19,7 +19,7 @@ from pathlib import Path
 
 from core.orchestrator import CaptureSession
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -80,10 +80,11 @@ def _write_dist_csv(tmp: Path, session: CaptureSession) -> None:
 
 
 def _write_session_json(tmp: Path, session: CaptureSession) -> None:
-    cfg  = session.config
-    done = session.arduino_done
-    ds   = session.dist_status
-    sync = session.arduino_sync
+    cfg     = session.config
+    done    = session.arduino_done
+    ds      = session.dist_status
+    a_sync  = session.arduino_sync
+    d_sync  = session.dist_sync
 
     doc = {
         "schema_version":   SCHEMA_VERSION,
@@ -96,9 +97,9 @@ def _write_session_json(tmp: Path, session: CaptureSession) -> None:
             "post":             done.post,
             "trigger_tick_ms":  done.trigger_tick_ms,
             "sample_period_ms": done.sample_period_ms,
-            "offset_ms":        sync.offset_ms,
-            "rtt_ms_best":      sync.rtt_ms_best,
-            "n_sync_samples":   sync.n_samples,
+            "offset_ms":        a_sync.offset_ms,
+            "rtt_ms_best":      a_sync.rtt_ms_best,
+            "n_sync_samples":   a_sync.n_samples,
         },
         "distribution": {
             "port":             session.dist_port,
@@ -106,7 +107,9 @@ def _write_session_json(tmp: Path, session: CaptureSession) -> None:
             "trigger_idx":      ds.trigger_idx,
             "sample_period_ms": ds.sample_period_ms,
             "channels":         ds.channels,
-            "rtt_ms":           session.dist_rtt_ms,
+            "offset_ms":        d_sync.offset_ms,
+            "rtt_ms_best":      d_sync.rtt_ms_best,
+            "n_sync_samples":   d_sync.n_samples,
         },
         "offset_ad_ms": session.offset_ad_ms,
     }

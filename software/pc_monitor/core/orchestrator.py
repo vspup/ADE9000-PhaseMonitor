@@ -66,11 +66,11 @@ class CaptureSession:
     # Distribution side
     dist_samples:    list[DistCapSample]   # list of (idx, raw_ints, hex_strs)
     dist_status:     DistCapStatus         # CAP STATUS snapshot from drain phase
-    dist_rtt_ms:     float                 # median PING RTT (no proper SYNC yet)
+    dist_sync:       SyncResult            # SYNC <seq> probe (sequencer.md §3.4)
     dist_port:       str
 
     # Cross-device
-    offset_ad_ms:    float   # offset_arduino − dist_rtt_ms/2  (§3.4 approximation)
+    offset_ad_ms:    float   # arduino_sync.offset_ms − dist_sync.offset_ms
 
 
 # ---------------------------------------------------------------------------
@@ -207,10 +207,12 @@ class Orchestrator:
                   f"ADE9000 offset={arduino_sync.offset_ms:.1f} ms  "
                   f"RTT_best={arduino_sync.rtt_ms_best:.2f} ms  "
                   f"used {arduino_sync.n_used}/{arduino_sync.n_samples}")
-        self._log("SYNC", "Distribution PING ×25")
-        dist_rtt_ms    = self._dist.ping_probe()
-        dist_offset_ms = dist_rtt_ms / 2.0
-        self._log("SYNC", f"Distribution RTT_median={dist_rtt_ms:.2f} ms")
+        self._log("SYNC", "Distribution SYNC ×25")
+        dist_sync = self._dist.sync_probe()
+        self._log("SYNC",
+                  f"Distribution offset={dist_sync.offset_ms:.1f} ms  "
+                  f"RTT_best={dist_sync.rtt_ms_best:.2f} ms  "
+                  f"used {dist_sync.n_used}/{dist_sync.n_samples}")
 
         # Phase 2 — arm
         self._log("ARM", f"CAP SET {cfg.pre} {cfg.post} → ADE9000")
@@ -269,9 +271,9 @@ class Orchestrator:
             arduino_port    = cfg.arduino_port,
             dist_samples    = dist_samples,
             dist_status     = dist_cs,
-            dist_rtt_ms     = dist_rtt_ms,
+            dist_sync       = dist_sync,
             dist_port       = cfg.dist_port,
-            offset_ad_ms    = arduino_sync.offset_ms - dist_offset_ms,
+            offset_ad_ms    = arduino_sync.offset_ms - dist_sync.offset_ms,
         )
 
     def _drain_both(self) -> tuple[CaptureStatus, DistCapStatus]:

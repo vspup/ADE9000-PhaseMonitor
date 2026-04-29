@@ -60,7 +60,10 @@ def _session(output_dir: str, *, session_id: str = "2026-01-01T12-00-00",
             state="READY", samples=n_dist, trigger_idx=2,
             sample_period_ms=25, channels=8, trigger_tick=99000,
         ),
-        dist_rtt_ms     = 4.0,
+        dist_sync       = SyncResult(
+            offset_ms=2.0, rtt_ms_median=4.5, rtt_ms_best=3.5,
+            n_samples=25, n_used=8,
+        ),
         dist_port       = "COM7",
         offset_ad_ms    = 121.45,
     )
@@ -161,8 +164,17 @@ class TestRoundTrip(unittest.TestCase):
         self.assertAlmostEqual(self.rt.arduino_sync.rtt_ms_best,
                                self.orig.arduino_sync.rtt_ms_best)
 
-    def test_dist_rtt_ms(self):
-        self.assertAlmostEqual(self.rt.dist_rtt_ms, self.orig.dist_rtt_ms)
+    def test_dist_sync_offset(self):
+        self.assertAlmostEqual(self.rt.dist_sync.offset_ms,
+                               self.orig.dist_sync.offset_ms)
+
+    def test_dist_sync_rtt_best(self):
+        self.assertAlmostEqual(self.rt.dist_sync.rtt_ms_best,
+                               self.orig.dist_sync.rtt_ms_best)
+
+    def test_dist_sync_n_samples(self):
+        self.assertEqual(self.rt.dist_sync.n_samples,
+                         self.orig.dist_sync.n_samples)
 
     def test_config_pre_post(self):
         self.assertEqual(self.rt.config.pre,  self.orig.config.pre)
@@ -208,6 +220,28 @@ class TestLegacyJson(unittest.TestCase):
 
             rt = read_session(paths.session_dir)
             self.assertEqual(rt.dist_status.trigger_idx, 0)
+
+    def test_schema_v1_legacy_dist_rtt_only(self):
+        """Schema v1 stored only `rtt_ms` on Distribution (no SYNC offset).
+
+        Reader must still produce a CaptureSession; dist_sync.offset_ms
+        falls back to 0; dist_sync.rtt_ms_best mirrors the legacy rtt_ms.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            sess = _session(tmp)
+            paths = write_session(sess)
+            doc = json.loads(paths.session_json.read_text(encoding="utf-8"))
+            doc["schema_version"] = 1
+            doc["distribution"].pop("offset_ms",      None)
+            doc["distribution"].pop("rtt_ms_best",    None)
+            doc["distribution"].pop("n_sync_samples", None)
+            doc["distribution"]["rtt_ms"] = 4.0
+            paths.session_json.write_text(json.dumps(doc), encoding="utf-8")
+
+            rt = read_session(paths.session_dir)
+            self.assertEqual(rt.dist_sync.offset_ms,   0.0)
+            self.assertAlmostEqual(rt.dist_sync.rtt_ms_best, 4.0)
+            self.assertEqual(rt.dist_sync.n_samples,   0)
 
 
 # ---------------------------------------------------------------------------

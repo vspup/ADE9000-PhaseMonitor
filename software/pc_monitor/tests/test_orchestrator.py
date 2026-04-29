@@ -128,7 +128,7 @@ def _make_fake_ade(
 def _make_fake_dist(
     *,
     ping_ok: bool = True,
-    ping_probe_rtt: float = 2.0,
+    sync_result: Optional[SyncResult] = None,
     arm_ok: bool = True,
     start_result=None,   # None → ok, "vbus_error" → VbusBlockError
     cap_status_sequence: Optional[List[DistCapStatus]] = None,
@@ -144,7 +144,7 @@ def _make_fake_dist(
     else:
         dist.ping.side_effect = DistributionError("no reply")
 
-    dist.ping_probe.return_value = ping_probe_rtt
+    dist.sync_probe.return_value = sync_result or _sync_result(offset_ms=0.0)
 
     if arm_ok:
         dist.arm.return_value = None
@@ -202,9 +202,16 @@ class TestHappyPath(unittest.TestCase):
 
     def test_offset_ad_computed(self):
         ade  = _make_fake_ade(sync_result=_sync_result(offset_ms=500.0))
-        dist = _make_fake_dist(ping_probe_rtt=4.0)   # dist_offset = 2.0
+        dist = _make_fake_dist(sync_result=_sync_result(offset_ms=2.0))
         sess = Orchestrator(_cfg(), ade, dist).run()
         self.assertAlmostEqual(sess.offset_ad_ms, 498.0)   # 500 − 2
+
+    def test_dist_sync_stored_on_session(self):
+        ade  = _make_fake_ade()
+        dist_sync = _sync_result(offset_ms=42.0)
+        dist = _make_fake_dist(sync_result=dist_sync)
+        sess = Orchestrator(_cfg(), ade, dist).run()
+        self.assertIs(sess.dist_sync, dist_sync)
 
     def test_ports_closed_after_success(self):
         ade  = _make_fake_ade()

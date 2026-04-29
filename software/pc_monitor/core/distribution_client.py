@@ -7,6 +7,7 @@ Exports:
   DistCapSample        — one capture sample: (idx, raw_ints, hex_strs)
   DistributionError / VbusBlockError / StartAlreadyOnError / DistributionTimeout
   DistributionClient   — high-level blocking API for the orchestrator
+                         (provides sync_probe → SyncResult, mirrors ADE9000)
 
 db_tool.py currently has its own copy of DistributionProtocol; that copy
 should be replaced with an import from here in a follow-up cleanup.
@@ -17,10 +18,10 @@ import queue
 import re
 import time
 from dataclasses import dataclass
-from statistics import median
 from typing import Optional
 
 from core.serial_transport import SerialTransport
+from core.sync_probe import SyncResult, SyncSample, compute_offset
 
 
 CHANNEL_KEYS: list[str] = [
@@ -70,6 +71,10 @@ class DistributionProtocol:
     def cmd_cap_read(offset: int, count: int) -> str:
         return f"CAP READ {offset} {count}"
 
+    @staticmethod
+    def cmd_sync(seq: int) -> str:
+        return f"SYNC {seq}"
+
     _STATUS_RE = re.compile(
         r"STATUS\s+power=(?P<power>\d+)\s+vbus=(?P<vbus>\d+)"
         r"\s+mode=(?P<mode>\w+)\s+trig=(?P<trig>\d+)",
@@ -95,6 +100,14 @@ class DistributionProtocol:
     )
     _CAP_DONE_RE   = re.compile(r"CAP\s+READ\s+done\s+count=(?P<count>\d+)", re.IGNORECASE)
     _EVT_PREFIX_RE = re.compile(r"^EVT:\s*(?P<body>.*)$", re.IGNORECASE)
+    # "SYNC ok" prefix is intentionally NOT required: same RS-485 garble
+    # tolerance pattern as _CAP_STATUS_RE — first bytes can be mangled by
+    # the half-duplex DE-pin transition, but the seq/tick fields survive
+    # and are distinctive enough to key on.
+    _SYNC_RE = re.compile(
+        r"seq=(?P<seq>\d+)\s+tick=(?P<tick>\d+)",
+        re.IGNORECASE,
+    )
 
     @staticmethod
     def parse_status(line: str) -> Optional[dict]:
@@ -146,6 +159,17 @@ class DistributionProtocol:
     def parse_evt(line: str) -> Optional[str]:
         m = DistributionProtocol._EVT_PREFIX_RE.match(line)
         return m.group("body").strip() if m else None
+
+    @staticmethod
+    def parse_sync(line: str) -> Optional[tuple[int, int]]:
+        """Parse 'SYNC ok seq=<n> tick=<t>' → (seq, tick_ms).
+
+        Tolerant of garbled prefix; matches anywhere in the line.
+        """
+        m = DistributionProtocol._SYNC_RE.search(line)
+        if not m:
+            return None
+        return int(m.group("seq")), int(m.group("tick"))
 
 
 # ---------------------------------------------------------------------------
@@ -348,17 +372,63 @@ class DistributionClient:
             skipped.append(line)
             # Garbled / echo line — keep scanning until PONG or timeout.
 
-    def ping_probe(self, n: int = 25, timeout: float = 1.0) -> float:
-        """Send N PING probes; return median RTT in ms."""
-        rtts: list[float] = []
-        for _ in range(n):
-            try:
-                rtts.append(self.ping(timeout))
-            except DistributionTimeout:
-                pass
-        if not rtts:
-            raise DistributionTimeout("ping_probe: no responses received")
-        return median(rtts)
+    def sync_probe(
+        self, n: int = 25, best_k: int = 8, probe_timeout: float = 0.5,
+        inter_probe_gap_s: float = 0.05,
+    ) -> SyncResult:
+        """Run N SYNC probes; return clock-offset estimate.
+
+        Mirrors Ade9000Client.sync_probe: recv_ns is recorded immediately
+        on dequeue (before parsing) to minimise bias; probes that time out
+        or echo back the wrong seq are skipped; remaining samples feed
+        compute_offset() which picks the cleanest best_k by RTT.
+        EVT lines are sidelined to the event buffer; garbled / unrelated
+        lines are skipped (RS-485 half-duplex tolerance).
+
+        ``inter_probe_gap_s`` is a small idle window before each probe.
+        Empirically required on RS-485: back-to-back probes on a USB-RS485
+        adapter drop ≈80 % of replies because the DE-pin auto-direction
+        latency overlaps the next host transmit and garbles the reply
+        framing. 50 ms gap → ~96 % success rate on the stock adapter; that
+        matches the wider RS-485 timing budget the link already lives on.
+        ADE9000 (USB CDC, no DE-pin) does not need this, hence the gap is
+        local to DistributionClient.
+        """
+        samples: list[SyncSample] = []
+        for seq in range(1, n + 1):
+            if seq > 1 and inter_probe_gap_s > 0:
+                time.sleep(inter_probe_gap_s)
+            self._drain()
+            send_ns = time.perf_counter_ns()
+            self._t.send_line(DistributionProtocol.cmd_sync(seq))
+            deadline = time.monotonic() + probe_timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    line = self._t.rx_queue.get(timeout=min(remaining, 0.1))
+                except queue.Empty:
+                    continue
+                recv_ns = time.perf_counter_ns()
+                if DistributionProtocol.parse_evt(line) is not None:
+                    self._evt_lines.append(line)
+                    continue
+                parsed = DistributionProtocol.parse_sync(line)
+                if parsed is None:
+                    # Garbled / unrelated line — keep scanning until deadline.
+                    continue
+                got_seq, tick_ms = parsed
+                if got_seq != seq:
+                    # Stale reply from a previous probe — skip.
+                    continue
+                samples.append(SyncSample(
+                    seq=seq, send_ns=send_ns, recv_ns=recv_ns, tick_ms=tick_ms,
+                ))
+                break
+        if not samples:
+            raise DistributionTimeout("sync_probe: no responses received")
+        return compute_offset(samples, best_k)
 
     def status(self, timeout: float = 2.0) -> dict:
         reply = self._send_recv(DistributionProtocol.CMD_STATUS, timeout)

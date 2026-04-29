@@ -60,7 +60,10 @@ def _session(output_dir: str, *, n_arduino: int = 5, n_dist: int = 5) -> Capture
             state="READY", samples=n_dist, trigger_idx=2,
             sample_period_ms=25, channels=8, trigger_tick=99000,
         ),
-        dist_rtt_ms     = 4.0,
+        dist_sync       = SyncResult(
+            offset_ms=2.0, rtt_ms_median=4.5, rtt_ms_best=3.5,
+            n_samples=25, n_used=8,
+        ),
         dist_port       = "COM7",
         offset_ad_ms    = 121.45,
     )
@@ -251,7 +254,8 @@ class TestSessionJson(unittest.TestCase):
 
     def test_distribution_section_keys(self):
         d = self.doc["distribution"]
-        for key in ("port", "trigger_tick_ms", "sample_period_ms", "channels", "rtt_ms"):
+        for key in ("port", "trigger_tick_ms", "sample_period_ms", "channels",
+                    "offset_ms", "rtt_ms_best", "n_sync_samples"):
             self.assertIn(key, d, f"missing key: {key!r}")
 
     def test_distribution_trigger_tick(self):
@@ -260,10 +264,22 @@ class TestSessionJson(unittest.TestCase):
             self.sess.dist_status.trigger_tick,
         )
 
-    def test_distribution_rtt_ms(self):
+    def test_distribution_offset_ms(self):
         self.assertAlmostEqual(
-            self.doc["distribution"]["rtt_ms"],
-            self.sess.dist_rtt_ms,
+            self.doc["distribution"]["offset_ms"],
+            self.sess.dist_sync.offset_ms,
+        )
+
+    def test_distribution_rtt_ms_best(self):
+        self.assertAlmostEqual(
+            self.doc["distribution"]["rtt_ms_best"],
+            self.sess.dist_sync.rtt_ms_best,
+        )
+
+    def test_distribution_n_sync_samples(self):
+        self.assertEqual(
+            self.doc["distribution"]["n_sync_samples"],
+            self.sess.dist_sync.n_samples,
         )
 
     def test_valid_json_structure(self):
