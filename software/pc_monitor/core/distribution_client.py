@@ -296,13 +296,53 @@ class DistributionClient:
         self._t.send_line(cmd)
         return self._recv(timeout)
 
+    def _send_recv_ok(self, cmd: str, label: str, timeout: float) -> None:
+        """Send cmd, scan for an ack ending in " OK". Raises on timeout.
+
+        Tolerates RS-485 garbled-prefix replies: the FW always emits
+        "<CMD> ok\\r\\n", so the trailing " OK" is the reliable fix-point;
+        the leading bytes are routinely mangled by TX→RX adapter switching.
+        EVT lines are sidelined to self._evt_lines (same as _recv).
+        On timeout, the error includes every skipped line — RS-485 garble
+        diagnosis depends on knowing what actually arrived on the wire.
+        """
+        self._drain()
+        self._t.send_line(cmd)
+        deadline = time.monotonic() + timeout
+        skipped: list[str] = []
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DistributionTimeout(
+                    f"{label}: no clean OK reply after {timeout:.1f}s; "
+                    f"skipped={skipped!r}"
+                )
+            try:
+                line = self._t.rx_queue.get(timeout=min(remaining, 0.1))
+            except queue.Empty:
+                continue
+            if DistributionProtocol.parse_evt(line) is not None:
+                self._evt_lines.append(line)
+                continue
+            if line.upper().rstrip().endswith(" OK"):
+                return
+            skipped.append(line)
+            # Garbled / echo line — keep scanning until OK or deadline.
+
     # -- commands --
 
     def mode_cmd(self, timeout: float = 2.0) -> None:
-        """Switch Distribution board to CMD mode; verify ack."""
-        reply = self._send_recv(DistributionProtocol.CMD_MODE_CMD, timeout)
-        if "MODE CMD OK" not in reply.upper():
-            raise DistributionError(f"MODE CMD failed: {reply!r}")
+        """Switch Distribution board to CMD mode; verify ack.
+
+        Scans for a line whose tail is " OK" — RS-485 TX→RX adapter switching
+        can mangle the leading bytes of the "MODE CMD ok" reply (e.g. an
+        observed wire form was '=\\x11\\x15\\x1a5D ok'); the trailing " ok"
+        survives and is what we key on.  Truly destroyed replies fall through
+        to a clean DistributionTimeout instead of a false-fail.
+        """
+        self._send_recv_ok(
+            DistributionProtocol.CMD_MODE_CMD, "MODE CMD", timeout
+        )
 
     def ping(self, timeout: float = 2.0) -> float:
         """Send PING; return round-trip time in ms.
@@ -350,9 +390,12 @@ class DistributionClient:
         return parsed
 
     def arm(self, timeout: float = 2.0) -> None:
-        reply = self._send_recv(DistributionProtocol.CMD_ARM, timeout)
-        if "ARM OK" not in reply.upper():
-            raise DistributionError(f"ARM failed: {reply!r}")
+        """Arm the Distribution capture FSM; verify ack.
+
+        Same RS-485 garble tolerance as mode_cmd(): scan for a tail of " OK"
+        and skip mangled-prefix lines.  See mode_cmd() for the rationale.
+        """
+        self._send_recv_ok(DistributionProtocol.CMD_ARM, "ARM", timeout)
 
     def start(self, timeout: float = 5.0) -> None:
         """Send START. Raises VbusBlockError / StartAlreadyOnError on refusal."""

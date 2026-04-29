@@ -301,6 +301,38 @@ class TestPingProbe(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# DistributionClient — mode_cmd
+# ---------------------------------------------------------------------------
+
+class TestModeCmd(unittest.TestCase):
+    def test_success(self):
+        t = _FakeTransport()
+        t.push_replies("MODE CMD ok")
+        DistributionClient(t).mode_cmd()
+        self.assertEqual(t.sent[-1], "MODE CMD")
+
+    def test_recovers_garbled_prefix(self):
+        # Wire form actually observed in the field — leading bytes of
+        # "MODE CMD ok" mangled by RS-485 TX→RX switching, " ok" intact.
+        t = _FakeTransport()
+        t.push_replies("=\x11\x15\x1a5D ok")
+        DistributionClient(t).mode_cmd()
+
+    def test_skips_evt_lines(self):
+        t = _FakeTransport()
+        t.push_replies("EVT: vbus_block tick=1234", "MODE CMD ok")
+        client = DistributionClient(t)
+        client.mode_cmd()
+        self.assertEqual(client.take_events(), ["EVT: vbus_block tick=1234"])
+
+    def test_garbled_reply_times_out(self):
+        t = _FakeTransport()
+        t.push_replies("PSk")
+        with self.assertRaises(DistributionError):
+            DistributionClient(t).mode_cmd(timeout=0.05)
+
+
+# ---------------------------------------------------------------------------
 # DistributionClient — status / arm / start
 # ---------------------------------------------------------------------------
 
@@ -327,11 +359,30 @@ class TestArm(unittest.TestCase):
         DistributionClient(t).arm()
         self.assertEqual(t.sent[-1], "ARM")
 
-    def test_failure_raises(self):
+    def test_recovers_garbled_prefix(self):
+        # Real wire form observed when RS-485 TX→RX adapter mangled the
+        # leading bytes of "ARM ok" but the trailing " ok" survived.
         t = _FakeTransport()
-        t.push_replies("ERR: not allowed")
+        t.push_replies("=\x11\x15\x1a5D ok")
+        DistributionClient(t).arm()
+
+    def test_skips_evt_lines(self):
+        # An EVT line arriving between the command and the OK is sidelined
+        # into the event buffer, not treated as the ack.
+        t = _FakeTransport()
+        t.push_replies("EVT: vbus_block tick=1234", "ARM ok")
+        client = DistributionClient(t)
+        client.arm()
+        self.assertEqual(client.take_events(), ["EVT: vbus_block tick=1234"])
+
+    def test_garbled_reply_times_out(self):
+        # Fully destroyed reply (e.g. "PSk" — neither " OK" nor "ERROR" tail)
+        # is honestly reported as a timeout instead of a false error.
+        # DistributionTimeout is-a DistributionError, so old expectations hold.
+        t = _FakeTransport()
+        t.push_replies("PSk")
         with self.assertRaises(DistributionError):
-            DistributionClient(t).arm()
+            DistributionClient(t).arm(timeout=0.05)
 
 
 class TestStart(unittest.TestCase):
