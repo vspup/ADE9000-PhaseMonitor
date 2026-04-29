@@ -50,6 +50,7 @@ focus modes, ADC channel filter, and click-to-place comparison markers.
 | `eba89a3` | chore: refresh PROGRESS — viewer feature inventory, 234 tests, next actions |
 | (this)    | feat: session browser (reader + dialog) + Reset Distribution recovery button |
 | `50622da` | feat(orchestrator): real Distribution SYNC offset, drop rtt/2 approximation |
+| `ae8d1fd` | feat(orchestrator): CAP ABORT on error path; Reset covers CAPTURING |
 
 ## Commits this session (dev, mps2p-FW-db-v3)
 
@@ -58,11 +59,12 @@ focus modes, ADC channel filter, and click-to-place comparison markers.
 | `37c8fa5` | fix: s_cap_tx 96→128 B (CAP STATUS truncated trigger_tick) |
 | `76a3513` | feat: Phase 5 EVT wiring — vbus_block + RS485_U1_EmitEvent docs |
 | `f6145a2` | feat(rs485): SYNC <seq> for PC clock-offset estimation |
+| `63a04f4` | feat(capture+rs485): CAP ABORT — clean any-state → IDLE |
 
 ## Test status
 
 ```
-300 passed, 1 skipped   (≈12 s, with PySide6 deps)
+306 passed, 1 skipped   (≈12 s, with PySide6 deps)
 python -m pytest tests/  from software/pc_monitor/
 ```
 
@@ -70,9 +72,9 @@ Tests by file (collected count, latest run):
 
 | File | Tests |
 |------|-------|
-| `test_distribution_client.py` | 75 |
+| `test_distribution_client.py` | 80 |
 | `test_ade9000_client.py` | 36 |
-| `test_orchestrator.py` | 28 |
+| `test_orchestrator.py` | 29 |
 | `test_session_writer.py` | 35 |
 | `test_session_reader.py` | 26 |
 | `test_orchestrator_worker.py` | 8 |
@@ -82,10 +84,8 @@ Tests by file (collected count, latest run):
 | `test_sync_probe.py` | 7 |
 | `test_serial_transport.py` | 15 |
 
-Net delta vs 04-28 PROGRESS snapshot: +58 tests overall.
-Latest +34 from this session: `parse_sync` ×7, `cmd_sync`, `sync_probe` ×7,
-`dist_sync` orchestrator wiring, schema-v2 round-trip + schema-v1 legacy
-compat in session writer/reader.
+Latest +6 (CAP ABORT): `TestCapAbort` ×5, `test_dist_error_state_aborts_dist`,
+`test_vbus_error_aborts_both` extended.
 
 ## Capture viewer — feature inventory
 
@@ -171,9 +171,6 @@ correctly. Older files without it are still readable (defaults to 0).
 ## Not yet implemented
 
 - **Export from viewer**: PNG snapshot / CSV slice between markers.
-- **Distribution `CAP ABORT`** (FW-side): would let `_abort_both` cancel a
-  CAPTURING session cleanly; today the UI Reset button covers most of
-  the recovery surface but cannot interrupt an in-progress capture.
 
 ## Architecture
 
@@ -203,17 +200,21 @@ orchestrator_tool.py
 
 ## Next actions (priority order)
 
-1. **Extract `_Transport`** into `core/serial_transport.py` so
-   `ade9000_client.py` and `distribution_client.py` stop carrying
-   ~70 lines of duplicate transport code each. Parameterise on
-   encoding, line terminator, and the post-open flush hack.
-2. **Export from viewer** — PNG snapshot of the current view, plus a
+1. **Export from viewer** — PNG snapshot of the current view, plus a
    CSV slice between M1/M2 if both are placed.
-3. **Decide marker pane fate** — confirm the 150 px reserved height
+2. **Decide marker pane fate** — confirm the 150 px reserved height
    feels right on a real-data run; switch to `QScrollArea` only if
    the user actually hits the clip case.
+3. **ADE9000 USB CDC latency** (High in Known Issues) — investigate
+   Windows USB CDC tuning or raise `best_k` to reduce ~50 ms jitter
+   in `offset_ad_ms`. Now that both sides ship a real SYNC, this is
+   the dominant source of cross-device timing error.
 
-Done in this session: Distribution `SYNC <seq>` (cross-repo with
-`mps2p-FW-db-v3` `f6145a2`) replacing the `rtt/2` approximation.
-Hardware verified on COM3: 24/25 probes ok, RTT_best ~50 ms,
-stable offset; sequencer.md §3.4 / §6.3 / §7 updated accordingly.
+Done in this session:
+- Distribution `SYNC <seq>` (cross-repo `f6145a2` + `50622da`)
+  replacing the `rtt/2` approximation. Hardware: 24/25 probes ok,
+  RTT_best ~50 ms.
+- Distribution `CAP ABORT` (cross-repo `63a04f4` + `ae8d1fd`) closing
+  the error-path gap; `_abort_both` now resets both devices, Reset
+  Distribution UI worker covers stuck CAPTURING. Hardware: IDLE /
+  ARMED → IDLE transitions verified, idempotency confirmed.
