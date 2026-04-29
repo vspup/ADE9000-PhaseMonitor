@@ -136,6 +136,50 @@ class TestSendLine(unittest.TestCase):
                 t.close()
         self.assertEqual(fake_holder[0].writes, [b"CMD\r\n", b"CMD2\r\n"])
 
+    def test_tx_preamble_prepended_to_payload(self):
+        # Sacrificial preamble bytes go before the real command — used
+        # by the Distribution RS-485 client to wake up the USB-RS485
+        # adapter's auto-direction control.
+        fake_holder: List[_FakeSerial] = []
+
+        def factory(**kw):
+            fs = _FakeSerial(**kw)
+            fake_holder.append(fs)
+            return fs
+
+        t = _make_transport(
+            encoding="ascii", line_terminator=b"\r\n", tx_preamble=b"\r\n"
+        )
+        with mock.patch.object(serial_transport.serial, "Serial", side_effect=factory):
+            t.open("COM_FAKE", 57600)
+            try:
+                t.send_line("ARM")
+                t.send_line("PING")
+            finally:
+                t.close()
+        self.assertEqual(
+            fake_holder[0].writes, [b"\r\nARM\r\n", b"\r\nPING\r\n"]
+        )
+
+    def test_default_tx_preamble_is_empty(self):
+        # Without tx_preamble, the wire output is just the command and
+        # terminator — preserves prior ADE9000-side behaviour.
+        fake_holder: List[_FakeSerial] = []
+
+        def factory(**kw):
+            fs = _FakeSerial(**kw)
+            fake_holder.append(fs)
+            return fs
+
+        t = _make_transport(encoding="utf-8", line_terminator=b"\n")
+        with mock.patch.object(serial_transport.serial, "Serial", side_effect=factory):
+            t.open("COM_FAKE", 115200)
+            try:
+                t.send_line("PING")
+            finally:
+                t.close()
+        self.assertEqual(fake_holder[0].writes, [b"PING\n"])
+
 
 class TestPostOpenFlush(unittest.TestCase):
     def test_flush_writes_newline_and_resets_input(self):

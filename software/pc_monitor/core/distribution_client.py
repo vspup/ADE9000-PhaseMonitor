@@ -170,11 +170,16 @@ DistCapSample = tuple[int, list[int], list[str]]   # (idx, raw_ints, hex_strs)
 # ---------------------------------------------------------------------------
 
 def _default_transport() -> SerialTransport:
+    # tx_preamble: sacrificial \r\n absorbs leading-byte loss caused by
+    # USB-RS485 adapter auto-direction (DE) latency. The FW parser treats
+    # an empty line as a no-op, so the preamble has no semantic effect
+    # but rescues short commands like "ARM\r\n" from wire corruption.
     return SerialTransport(
         encoding="ascii",
         line_terminator=b"\r\n",
         post_open_flush=False,
         not_open_error_cls=DistributionError,
+        tx_preamble=b"\r\n",
     )
 
 
@@ -237,15 +242,16 @@ class DistributionClient:
         self._t.send_line(cmd)
         return self._recv(timeout)
 
-    def _send_recv_ok(self, cmd: str, label: str, timeout: float) -> None:
-        """Send cmd, scan for an ack ending in " OK". Raises on timeout.
+    def _try_send_recv_ok_once(
+        self, cmd: str, timeout: float
+    ) -> tuple[bool, list[str]]:
+        """One attempt: send cmd, scan rx for an ack with " OK" tail.
 
-        Tolerates RS-485 garbled-prefix replies: the FW always emits
-        "<CMD> ok\\r\\n", so the trailing " OK" is the reliable fix-point;
-        the leading bytes are routinely mangled by TX→RX adapter switching.
-        EVT lines are sidelined to self._evt_lines (same as _recv).
-        On timeout, the error includes every skipped line — RS-485 garble
-        diagnosis depends on knowing what actually arrived on the wire.
+        Returns ``(ok, skipped)``. ``ok`` is True if an OK-tail line was
+        seen. ``skipped`` lists every non-EVT, non-OK line received in
+        the deadline window — useful for diagnosing RS-485 garble even
+        on success (e.g. echo-corrupted prefix lines arriving before OK).
+        EVT lines are sidelined to ``self._evt_lines``.
         """
         self._drain()
         self._t.send_line(cmd)
@@ -254,10 +260,7 @@ class DistributionClient:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise DistributionTimeout(
-                    f"{label}: no clean OK reply after {timeout:.1f}s; "
-                    f"skipped={skipped!r}"
-                )
+                return False, skipped
             try:
                 line = self._t.rx_queue.get(timeout=min(remaining, 0.1))
             except queue.Empty:
@@ -266,9 +269,36 @@ class DistributionClient:
                 self._evt_lines.append(line)
                 continue
             if line.upper().rstrip().endswith(" OK"):
-                return
+                return True, skipped
             skipped.append(line)
-            # Garbled / echo line — keep scanning until OK or deadline.
+
+    def _send_recv_ok(self, cmd: str, label: str, timeout: float) -> None:
+        """Send cmd, expect an ack ending in " OK". Retries once on garbled
+        timeout before raising.
+
+        Tolerates two failure modes:
+          * Receive-side garble that destroys the " OK" suffix
+            (e.g. wire form 'PSk' from "ARM ok" — first attempt fails,
+            second attempt usually arrives clean).
+          * Send-side garble that makes the FW respond with "ERR unknown"
+            because the command was corrupted on the wire by USB-RS485
+            DE-pin latency. Combined with the tx_preamble flush in
+            SerialTransport, a single retry is sufficient in practice.
+
+        ARM / MODE CMD / PING are idempotent — re-sending is safe.
+        On final failure, the error message lists skipped lines from
+        both attempts so RS-485 garble diagnosis is not lost.
+        """
+        ok, skipped1 = self._try_send_recv_ok_once(cmd, timeout)
+        if ok:
+            return
+        ok, skipped2 = self._try_send_recv_ok_once(cmd, timeout)
+        if ok:
+            return
+        raise DistributionTimeout(
+            f"{label}: no clean OK reply after 2 attempts ({timeout:.1f}s each); "
+            f"attempt1 skipped={skipped1!r} attempt2 skipped={skipped2!r}"
+        )
 
     # -- commands --
 
@@ -290,15 +320,21 @@ class DistributionClient:
 
         Scans until PONG is found, skipping garbled lines that can appear
         during RS-485 TX→RX adapter switching (half-duplex settling artefact).
+        On timeout, the error message lists every skipped line so we can
+        tell "FW never replied" from "FW replied with garbage" — same
+        diagnostic instrumentation as _send_recv_ok.
         """
         self._drain()
         t0 = time.perf_counter_ns()
         self._t.send_line(DistributionProtocol.CMD_PING)
         deadline = time.monotonic() + timeout
+        skipped: list[str] = []
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise DistributionTimeout(f"PING: no PONG after {timeout:.1f}s")
+                raise DistributionTimeout(
+                    f"PING: no PONG after {timeout:.1f}s; skipped={skipped!r}"
+                )
             try:
                 line = self._t.rx_queue.get(timeout=min(remaining, 0.1))
             except queue.Empty:
@@ -309,6 +345,7 @@ class DistributionClient:
                 continue
             if "PONG" in upper:
                 return (time.perf_counter_ns() - t0) / 1e6
+            skipped.append(line)
             # Garbled / echo line — keep scanning until PONG or timeout.
 
     def ping_probe(self, n: int = 25, timeout: float = 1.0) -> float:

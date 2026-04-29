@@ -15,6 +15,15 @@ parameterised so each client keeps its own wire-format quirks:
 * ``not_open_error_cls`` — exception type raised by ``send_line`` when
                            the port is closed; lets each client surface
                            its native error class to callers.
+* ``tx_preamble``        — sacrificial bytes prepended to every
+                           ``send_line`` payload. Used by the
+                           Distribution RS-485 client to wake up the
+                           USB-RS485 adapter's auto-direction control:
+                           if DE asserts late, the leading bytes of a
+                           transmission are dropped or corrupted on the
+                           wire. A ``b"\\r\\n"`` preamble is treated by
+                           the FW as an empty line (no-op) and absorbs
+                           the loss instead of the real command.
 """
 from __future__ import annotations
 
@@ -43,11 +52,13 @@ class SerialTransport:
         line_terminator: bytes,
         post_open_flush: bool,
         not_open_error_cls: type[Exception] = RuntimeError,
+        tx_preamble: bytes = b"",
     ) -> None:
         self._encoding = encoding
         self._line_terminator = line_terminator
         self._post_open_flush = post_open_flush
         self._not_open_error_cls = not_open_error_cls
+        self._tx_preamble = tx_preamble
 
         self._port:   Optional[serial.Serial] = None
         self._thread: Optional[threading.Thread] = None
@@ -90,8 +101,8 @@ class SerialTransport:
     def send_line(self, line: str) -> None:
         if not self.is_open:
             raise self._not_open_error_cls("port not open")
-        payload = line.rstrip("\r\n").encode(self._encoding) + self._line_terminator
-        self._port.write(payload)
+        body = line.rstrip("\r\n").encode(self._encoding) + self._line_terminator
+        self._port.write(self._tx_preamble + body)
 
     def _reader(self) -> None:
         buf = b""

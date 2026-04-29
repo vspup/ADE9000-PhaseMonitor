@@ -284,6 +284,17 @@ class TestPing(unittest.TestCase):
         with self.assertRaises(DistributionTimeout):
             DistributionClient(t).ping(timeout=0.05)
 
+    def test_timeout_message_lists_skipped_lines(self):
+        # When PING times out, the error must include every non-EVT line
+        # that arrived during the wait — needed to tell "FW silent" apart
+        # from "FW replied with garbage".
+        t = _FakeTransport()
+        t.push_replies("tCtCtCERR unknown")
+        with self.assertRaises(DistributionTimeout) as cm:
+            DistributionClient(t).ping(timeout=0.05)
+        self.assertIn("skipped=", str(cm.exception))
+        self.assertIn("tCtCtCERR unknown", str(cm.exception))
+
 
 class TestPingProbe(unittest.TestCase):
     def test_median_of_three(self):
@@ -326,7 +337,10 @@ class TestModeCmd(unittest.TestCase):
         self.assertEqual(client.take_events(), ["EVT: vbus_block tick=1234"])
 
     def test_garbled_reply_times_out(self):
+        # With Fix B both attempts must fail to reach the timeout —
+        # push the destroyed reply twice.
         t = _FakeTransport()
+        t.push_replies("PSk")
         t.push_replies("PSk")
         with self.assertRaises(DistributionError):
             DistributionClient(t).mode_cmd(timeout=0.05)
@@ -379,10 +393,39 @@ class TestArm(unittest.TestCase):
         # Fully destroyed reply (e.g. "PSk" — neither " OK" nor "ERROR" tail)
         # is honestly reported as a timeout instead of a false error.
         # DistributionTimeout is-a DistributionError, so old expectations hold.
+        # With Fix B, the client also retries once before raising — both
+        # attempts have to fail to reach this code path.
         t = _FakeTransport()
-        t.push_replies("PSk")
+        t.push_replies("PSk")  # attempt 1
+        t.push_replies("PSk")  # attempt 2
         with self.assertRaises(DistributionError):
             DistributionClient(t).arm(timeout=0.05)
+
+    def test_retries_once_on_garbled_first_reply(self):
+        # First reply is destroyed garble; client retries the command
+        # automatically. If the retry arrives clean, arm() succeeds and
+        # no exception propagates.
+        t = _FakeTransport()
+        t.push_replies("PSk")     # attempt 1: garbled, no " OK" tail
+        t.push_replies("ARM ok")  # attempt 2: clean
+        DistributionClient(t).arm(timeout=0.05)
+        # Both attempts went out on the wire.
+        self.assertEqual(t.sent.count("ARM"), 2)
+
+    def test_timeout_message_lists_both_attempts(self):
+        # When both attempts fail, the timeout message must surface skipped
+        # lines from each — the first hint at a wire problem could be in
+        # either attempt's tail.
+        t = _FakeTransport()
+        t.push_replies("PSk")            # attempt 1
+        t.push_replies("ERR unknown")    # attempt 2
+        with self.assertRaises(DistributionTimeout) as cm:
+            DistributionClient(t).arm(timeout=0.05)
+        msg = str(cm.exception)
+        self.assertIn("attempt1 skipped=", msg)
+        self.assertIn("attempt2 skipped=", msg)
+        self.assertIn("PSk", msg)
+        self.assertIn("ERR unknown", msg)
 
 
 class TestStart(unittest.TestCase):
