@@ -26,7 +26,7 @@ class SerialReader(QThread):
     def run(self) -> None:
         try:
             self._ser = serial.Serial(self._port, self._baud, timeout=1.0)
-            time.sleep(0.2)  # Windows USB CDC: first write can be dropped without settle delay
+            time.sleep(0.5)  # Windows USB CDC: Arduino Zero re-enumerates on open (DTR toggle); SAMD21 needs ~500ms before it can answer
             self._running = True
             self.connection_changed.emit(True)
 
@@ -59,6 +59,14 @@ class SerialReader(QThread):
             self._ser.write((cmd + '\n').encode())
         except serial.SerialException as e:
             self.error_occurred.emit(f'send failed: {e}')
+
+    def reset_input_buffer(self) -> None:
+        """Drop any buffered RX bytes (called from main thread before retry)."""
+        if self._ser and self._ser.is_open:
+            try:
+                self._ser.reset_input_buffer()
+            except serial.SerialException:
+                pass
 
     def stop(self) -> None:
         self._running = False

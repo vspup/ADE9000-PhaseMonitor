@@ -2,7 +2,7 @@ import json
 import os
 
 import serial.tools.list_ports
-from PySide6.QtCore import Qt, QTimer, Slot
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QToolBar, QComboBox, QPushButton, QLabel,
@@ -13,11 +13,30 @@ from core.data_buffer import DataBuffer
 from core.logger import Logger
 from core.measurement_mode import MeasurementMode
 from core.packet_parser import parse_packet
+from core.port_scanner import ScanResult, scan_ports
 from core.serial_reader import SerialReader
 from ui.calibration_dialog import CalibrationDialog
 from ui.control_panel import ControlPanel
 from ui.plot_panel import PlotPanel
 from ui.status_bar import StatusBar
+
+
+# Arduino Zero re-enumerates USB CDC on every port open, so the first
+# SET WMODE monitor can land while SAMD21 is still booting — retry instead
+# of failing the whole connect.
+_WMODE_MAX_ATTEMPTS  = 3
+_WMODE_TIMEOUT_MS    = 1500
+
+
+class _ScanWorker(QThread):
+    finished = Signal(object)   # ScanResult
+
+    def __init__(self, timeout: float, parent=None) -> None:
+        super().__init__(parent)
+        self._timeout = timeout
+
+    def run(self) -> None:
+        self.finished.emit(scan_ports(timeout=self._timeout))
 
 
 class MainWindow(QMainWindow):
@@ -31,10 +50,12 @@ class MainWindow(QMainWindow):
         self._logger       = Logger()
         self._cal_dlg:     CalibrationDialog | None = None
         self._current_mode: MeasurementMode | None  = None
+        self._scan_worker: _ScanWorker | None       = None
 
         # Work-mode handshake: this GUI always drives the device into MONITOR
         # explicitly on connect. A timer aborts if firmware does not confirm.
         self._wmode_confirmed: bool = False
+        self._wmode_attempts: int  = 0
         self._wmode_timeout = QTimer(self)
         self._wmode_timeout.setSingleShot(True)
         self._wmode_timeout.timeout.connect(self._on_wmode_timeout)
@@ -83,11 +104,17 @@ class MainWindow(QMainWindow):
         self.cmb_port.setMinimumWidth(110)
         tb.addWidget(self.cmb_port)
 
-        btn_refresh = QPushButton('↺')
-        btn_refresh.setFixedWidth(28)
-        btn_refresh.setToolTip('Refresh port list')
-        btn_refresh.clicked.connect(self._refresh_ports)
-        tb.addWidget(btn_refresh)
+        self.btn_refresh = QPushButton('↺')
+        self.btn_refresh.setFixedWidth(28)
+        self.btn_refresh.setToolTip('Refresh port list')
+        self.btn_refresh.clicked.connect(self._refresh_ports)
+        tb.addWidget(self.btn_refresh)
+
+        self.btn_auto = QPushButton('Auto')
+        self.btn_auto.setFixedWidth(48)
+        self.btn_auto.setToolTip('Auto-detect ADE9000 port')
+        self.btn_auto.clicked.connect(self._auto_detect_port)
+        tb.addWidget(self.btn_auto)
 
         tb.addSeparator()
 
@@ -125,6 +152,40 @@ class MainWindow(QMainWindow):
         self.cmb_port.addItems(ports)
         if current in ports:
             self.cmb_port.setCurrentText(current)
+
+    @Slot()
+    def _auto_detect_port(self) -> None:
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            return
+        self.btn_auto.setEnabled(False)
+        self.btn_refresh.setEnabled(False)
+        self.cmb_port.setEnabled(False)
+        self.btn_connect.setEnabled(False)
+        self.lbl_status.setText('●  Scanning ports…')
+        self.lbl_status.setStyleSheet('color: #ffd43b; padding: 0 8px;')
+
+        self._scan_worker = _ScanWorker(timeout=0.6, parent=self)
+        self._scan_worker.finished.connect(self._on_auto_detect_done)
+        self._scan_worker.start()
+
+    @Slot(object)
+    def _on_auto_detect_done(self, result: ScanResult) -> None:
+        self.btn_auto.setEnabled(True)
+        self.btn_refresh.setEnabled(True)
+        self.cmb_port.setEnabled(True)
+        self.btn_connect.setEnabled(True)
+
+        port = result.arduino_port
+        if port:
+            self._refresh_ports()
+            idx = self.cmb_port.findText(port)
+            if idx >= 0:
+                self.cmb_port.setCurrentIndex(idx)
+            self.lbl_status.setText(f'●  Found ADE9000 on {port}')
+            self.lbl_status.setStyleSheet('color: #51cf66; padding: 0 8px;')
+        else:
+            self.lbl_status.setText('●  ADE9000 not found')
+            self.lbl_status.setStyleSheet('color: #ff6b6b; padding: 0 8px;')
 
     def _toggle_connection(self) -> None:
         if self._reader.isRunning():
@@ -185,16 +246,14 @@ class MainWindow(QMainWindow):
     def _on_connection(self, connected: bool) -> None:
         if connected:
             self.btn_connect.setText('Disconnect')
-            self.lbl_status.setText('●  Initializing MONITOR…')
-            self.lbl_status.setStyleSheet('color: #ffd43b; padding: 0 8px;')
             self.ctrl.btn_calibrate.setEnabled(False)  # enabled after handshake
 
             # Explicit MONITOR handshake — this app only does live monitoring,
             # never assumes firmware default. Data packets are ignored until
             # the device acknowledges the requested work mode.
             self._wmode_confirmed = False
-            self._reader.send_command('SET WMODE monitor')
-            self._wmode_timeout.start(2000)
+            self._wmode_attempts  = 0
+            self._send_wmode_attempt()
 
             # Push the pre-selected measurement mode to firmware.
             selected = self.ctrl.cmb_mode.currentData()
@@ -202,12 +261,24 @@ class MainWindow(QMainWindow):
         else:
             self._wmode_timeout.stop()
             self._wmode_confirmed = False
+            self._wmode_attempts  = 0
             self.btn_connect.setText('Connect')
             self.lbl_status.setText('●  Disconnected')
             self.lbl_status.setStyleSheet('color: #888888; padding: 0 8px;')
             self.ctrl.btn_calibrate.setEnabled(False)
             self.ctrl.btn_calibrate.setToolTip('Connect to device first')
             self._current_mode = None
+
+    def _send_wmode_attempt(self) -> None:
+        """Issue SET WMODE monitor and start the per-attempt timer."""
+        self._wmode_attempts += 1
+        self.lbl_status.setText(
+            f'●  Initializing MONITOR ({self._wmode_attempts}/{_WMODE_MAX_ATTEMPTS})…'
+        )
+        self.lbl_status.setStyleSheet('color: #ffd43b; padding: 0 8px;')
+        self._reader.reset_input_buffer()
+        self._reader.send_command('SET WMODE monitor')
+        self._wmode_timeout.start(_WMODE_TIMEOUT_MS)
 
     # ------------------------------------------------------------------
     def _check_wmode_ack(self, line: str) -> None:
@@ -233,8 +304,12 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_wmode_timeout(self) -> None:
-        if not self._wmode_confirmed:
-            self._on_wmode_error('no response to SET WMODE monitor')
+        if self._wmode_confirmed:
+            return
+        if self._wmode_attempts < _WMODE_MAX_ATTEMPTS:
+            self._send_wmode_attempt()
+            return
+        self._on_wmode_error('no response to SET WMODE monitor')
 
     def _on_wmode_error(self, reason: str) -> None:
         self.lbl_status.setText(f'●  Init error: {reason[:40]}')
@@ -275,4 +350,6 @@ class MainWindow(QMainWindow):
         self._plot_timer.stop()
         self._reader.stop()
         self._logger.stop()
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            self._scan_worker.wait(2000)
         event.accept()
