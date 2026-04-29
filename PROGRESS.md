@@ -51,6 +51,7 @@ focus modes, ADC channel filter, and click-to-place comparison markers.
 | (this)    | feat: session browser (reader + dialog) + Reset Distribution recovery button |
 | `50622da` | feat(orchestrator): real Distribution SYNC offset, drop rtt/2 approximation |
 | `ae8d1fd` | feat(orchestrator): CAP ABORT on error path; Reset covers CAPTURING |
+| `32ab73e` | feat(viewer): export PNG snapshot + CSV slice between markers |
 
 ## Commits this session (dev, mps2p-FW-db-v3)
 
@@ -64,7 +65,7 @@ focus modes, ADC channel filter, and click-to-place comparison markers.
 ## Test status
 
 ```
-306 passed, 1 skipped   (≈12 s, with PySide6 deps)
+320 passed, 1 skipped   (≈12 s, with PySide6 deps)
 python -m pytest tests/  from software/pc_monitor/
 ```
 
@@ -82,10 +83,11 @@ Tests by file (collected count, latest run):
 | `test_capture_parser.py` | 21 |
 | `test_packet_parser.py` | 13 |
 | `test_sync_probe.py` | 7 |
+| `test_exporter.py` | 14 |
 | `test_serial_transport.py` | 15 |
 
-Latest +6 (CAP ABORT): `TestCapAbort` ×5, `test_dist_error_state_aborts_dist`,
-`test_vbus_error_aborts_both` extended.
+Latest +14 (Export): `slice_arduino` ×7, `slice_distribution` ×7 — boundary
+inclusiveness, t1>t2 swap, trigger offset, channel filter shapes.
 
 ## Capture viewer — feature inventory
 
@@ -170,7 +172,7 @@ correctly. Older files without it are still readable (defaults to 0).
 
 ## Not yet implemented
 
-- **Export from viewer**: PNG snapshot / CSV slice between markers.
+(none queued — see Next actions for the next planned items.)
 
 ## Architecture
 
@@ -200,15 +202,15 @@ orchestrator_tool.py
 
 ## Next actions (priority order)
 
-1. **Export from viewer** — PNG snapshot of the current view, plus a
-   CSV slice between M1/M2 if both are placed.
-2. **Decide marker pane fate** — confirm the 150 px reserved height
+1. **Decide marker pane fate** — confirm the 150 px reserved height
    feels right on a real-data run; switch to `QScrollArea` only if
    the user actually hits the clip case.
-3. **ADE9000 USB CDC latency** (High in Known Issues) — investigate
+2. **ADE9000 USB CDC latency** (High in Known Issues) — investigate
    Windows USB CDC tuning or raise `best_k` to reduce ~50 ms jitter
    in `offset_ad_ms`. Now that both sides ship a real SYNC, this is
    the dominant source of cross-device timing error.
+3. **`db_tool.py` dedup** (Low) — replace its private DistributionProtocol
+   copy with `from core.distribution_client import DistributionProtocol`.
 
 Done in this session:
 - Distribution `SYNC <seq>` (cross-repo `f6145a2` + `50622da`)
@@ -218,3 +220,6 @@ Done in this session:
   the error-path gap; `_abort_both` now resets both devices, Reset
   Distribution UI worker covers stuck CAPTURING. Hardware: IDLE /
   ARMED → IDLE transitions verified, idempotency confirmed.
+- Viewer Export (`32ab73e`): Save PNG (Ctrl+S, stitched plot rows) and
+  Export CSV slice (Ctrl+E, M1..M2 between markers, channel-filtered).
+  Default location `<repo>/data/`.
