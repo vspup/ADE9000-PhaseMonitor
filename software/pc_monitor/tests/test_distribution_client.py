@@ -23,8 +23,8 @@ from core.distribution_client import (
 # ---------------------------------------------------------------------------
 
 class _FakeTransport:
-    """Stub for _Transport. Each push_replies() call registers one batch of
-    lines to be delivered into rx_queue on the next send_line() call.
+    """Stub for SerialTransport. Each push_replies() call registers one batch
+    of lines to be delivered into rx_queue on the next send_line() call.
     This matches the real flow: _drain() clears stale data, send_line()
     triggers the device reply, _recv() reads from rx_queue."""
 

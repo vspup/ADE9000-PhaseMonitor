@@ -15,13 +15,12 @@ from __future__ import annotations
 
 import queue
 import re
-import threading
 import time
 from dataclasses import dataclass
 from statistics import median
 from typing import Optional
 
-import serial
+from core.serial_transport import SerialTransport
 
 
 CHANNEL_KEYS: list[str] = [
@@ -167,75 +166,17 @@ DistCapSample = tuple[int, list[int], list[str]]   # (idx, raw_ints, hex_strs)
 
 
 # ---------------------------------------------------------------------------
-# Internal transport — background reader thread
-# ---------------------------------------------------------------------------
-
-class _Transport:
-    ENCODING = "ascii"
-
-    def __init__(self) -> None:
-        self._port:   Optional[serial.Serial] = None
-        self._thread: Optional[threading.Thread] = None
-        self._stop  = threading.Event()
-        self.rx_queue: queue.Queue[str] = queue.Queue()
-
-    def open(self, port: str, baudrate: int = 57600) -> None:
-        if self._port and self._port.is_open:
-            raise RuntimeError("already open")
-        self._stop.clear()
-        self._port = serial.Serial(
-            port=port, baudrate=baudrate,
-            bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE, timeout=0.1,
-        )
-        self._thread = threading.Thread(target=self._reader, daemon=True)
-        self._thread.start()
-
-    def close(self) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=2.0)
-            self._thread = None
-        if self._port and self._port.is_open:
-            self._port.close()
-        self._port = None
-
-    @property
-    def is_open(self) -> bool:
-        return self._port is not None and self._port.is_open
-
-    def send_line(self, line: str) -> None:
-        if not self.is_open:
-            raise DistributionError("port not open")
-        self._port.write((line.rstrip("\r\n") + "\r\n").encode(self.ENCODING))
-
-    def _reader(self) -> None:
-        buf = b""
-        while not self._stop.is_set():
-            try:
-                chunk = self._port.read(256)
-            except serial.SerialException:
-                break
-            if not chunk:
-                continue
-            buf += chunk
-            while True:
-                best_i, best_sep = len(buf), b""
-                for sep in (b"\r\n", b"\n", b"\r"):
-                    i = buf.find(sep)
-                    if 0 <= i < best_i:
-                        best_i, best_sep = i, sep
-                if not best_sep:
-                    break
-                line = buf[:best_i].decode(self.ENCODING, errors="ignore").strip()
-                buf = buf[best_i + len(best_sep):]
-                if line:
-                    self.rx_queue.put(line)
-
-
-# ---------------------------------------------------------------------------
 # High-level blocking client
 # ---------------------------------------------------------------------------
+
+def _default_transport() -> SerialTransport:
+    return SerialTransport(
+        encoding="ascii",
+        line_terminator=b"\r\n",
+        post_open_flush=False,
+        not_open_error_cls=DistributionError,
+    )
+
 
 class DistributionClient:
     """Blocking API over the Distribution Board RS-485 protocol.
@@ -245,8 +186,8 @@ class DistributionClient:
     an internal buffer; retrieve and clear them with ``take_events()``.
     """
 
-    def __init__(self, _transport: Optional[_Transport] = None) -> None:
-        self._t = _transport if _transport is not None else _Transport()
+    def __init__(self, _transport: Optional[SerialTransport] = None) -> None:
+        self._t = _transport if _transport is not None else _default_transport()
         self._evt_lines: list[str] = []
 
     def open(self, port: str, baudrate: int = 57600) -> None:

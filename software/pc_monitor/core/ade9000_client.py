@@ -4,22 +4,16 @@ Exports:
   Ade9000Protocol    — pure-logic helpers (command strings, JSON parsing)
   Ade9000Client      — high-level blocking API for the orchestrator
   Ade9000Error / Ade9000ProtocolError / Ade9000Timeout / Ade9000FirmwareError
-
-_Transport is structurally identical to the one in distribution_client.py;
-the two will be merged into a shared serial_transport module once the
-orchestrator layer stabilises.
 """
 from __future__ import annotations
 
 import json
 import queue
-import threading
 import time
 from typing import Optional
 
-import serial
-
 from core.capture_parser import CaptureDone, CaptureSample, CaptureStatus, parse_capture_event
+from core.serial_transport import SerialTransport
 from core.sync_probe import SyncResult, SyncSample, compute_offset
 
 
@@ -95,83 +89,17 @@ class Ade9000Protocol:
 
 
 # ---------------------------------------------------------------------------
-# Transport — background reader thread
-# ---------------------------------------------------------------------------
-
-class _Transport:
-    ENCODING = "utf-8"
-
-    def __init__(self) -> None:
-        self._port:   Optional[serial.Serial] = None
-        self._thread: Optional[threading.Thread] = None
-        self._stop  = threading.Event()
-        self.rx_queue: queue.Queue[str] = queue.Queue()
-
-    def open(self, port: str, baudrate: int = 115200) -> None:
-        if self._port and self._port.is_open:
-            raise RuntimeError("already open")
-        self._stop.clear()
-        self._port = serial.Serial(
-            port=port, baudrate=baudrate,
-            bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE, timeout=0.1,
-        )
-        # Flush any garbage the port scanner may have deposited in the
-        # firmware's receive buffer (e.g., _probe_dist sent STATUS\r\n at
-        # 57600 baud to this 115200 port, leaving framing-error bytes).
-        # A bare \n causes the firmware to process the garbage as an empty
-        # line (unknown_cmd, ignored here), leaving the buffer clean.
-        self._port.write(b"\n")
-        time.sleep(0.1)
-        self._port.reset_input_buffer()
-        self._thread = threading.Thread(target=self._reader, daemon=True)
-        self._thread.start()
-
-    def close(self) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=2.0)
-            self._thread = None
-        if self._port and self._port.is_open:
-            self._port.close()
-        self._port = None
-
-    @property
-    def is_open(self) -> bool:
-        return self._port is not None and self._port.is_open
-
-    def send_line(self, line: str) -> None:
-        if not self.is_open:
-            raise Ade9000Error("port not open")
-        self._port.write((line.rstrip("\r\n") + "\n").encode(self.ENCODING))
-
-    def _reader(self) -> None:
-        buf = b""
-        while not self._stop.is_set():
-            try:
-                chunk = self._port.read(256)
-            except serial.SerialException:
-                break
-            if not chunk:
-                continue
-            buf += chunk
-            while True:
-                best_i, best_sep = len(buf), b""
-                for sep in (b"\r\n", b"\n", b"\r"):
-                    i = buf.find(sep)
-                    if 0 <= i < best_i:
-                        best_i, best_sep = i, sep
-                if not best_sep:
-                    break
-                line = buf[:best_i].decode(self.ENCODING, errors="ignore").strip()
-                buf = buf[best_i + len(best_sep):]
-                if line:
-                    self.rx_queue.put(line)
-
-
-# ---------------------------------------------------------------------------
 # High-level blocking client
 # ---------------------------------------------------------------------------
+
+def _default_transport() -> SerialTransport:
+    return SerialTransport(
+        encoding="utf-8",
+        line_terminator=b"\n",
+        post_open_flush=True,
+        not_open_error_cls=Ade9000Error,
+    )
+
 
 class Ade9000Client:
     """Blocking API over the ADE9000 Phase Monitor JSON Lines protocol.
@@ -182,7 +110,7 @@ class Ade9000Client:
     """
 
     def __init__(self, _transport=None) -> None:
-        self._t = _transport if _transport is not None else _Transport()
+        self._t = _transport if _transport is not None else _default_transport()
 
     def open(self, port: str, baudrate: int = 115200) -> None:
         self._t.open(port, baudrate)
