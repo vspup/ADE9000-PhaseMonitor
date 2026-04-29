@@ -231,9 +231,14 @@ class Orchestrator:
         try:
             self._dist.start()
         except VbusBlockError as exc:
-            # sequencer.md §7: vbus_error → abort ADE9000, no CSV
-            self._log("FIRE", "START refused (vbus_error) — aborting ADE9000")
+            # sequencer.md §7: vbus_error → abort ADE9000, no CSV.
+            # Distribution stays ARMED (relay never closed); the catch-all
+            # in run() will CAP ABORT it as part of _abort_both, but we
+            # also do it here so both devices are quiescent before the
+            # OrchestratorError surfaces and any UI handler reacts.
+            self._log("FIRE", "START refused (vbus_error) — aborting both")
             self._safe_ade_abort()
+            self._safe_dist_abort()
             raise OrchestratorError(
                 "Distribution refused START: VBUS already present",
                 phase="FIRE", device="Distribution", command="START",
@@ -368,6 +373,18 @@ class Orchestrator:
         except Exception:
             pass
 
+    def _safe_dist_abort(self) -> None:
+        """Best-effort CAP ABORT on Distribution; errors are swallowed.
+
+        The FW transitions any capture state — including CAPTURING — back
+        to IDLE without touching MAINS_REL. Idempotent; safe to call when
+        the FSM is already IDLE (e.g. after a successful READY drain).
+        """
+        try:
+            self._dist.cap_abort()
+        except Exception:
+            pass
+
     def _safe_wmode_monitor(self) -> None:
         """Best-effort SET WMODE monitor so ADE9000 resumes telemetry after session."""
         try:
@@ -378,8 +395,9 @@ class Orchestrator:
     def _abort_both(self) -> None:
         """Best-effort abort of both devices on the error path.
 
-        Distribution has no CAP ABORT command yet (sequencer.md §8);
-        re-ARM resets its FSM to IDLE. We skip that here — the device
-        will recover on next connect. ADE9000 is explicitly aborted.
+        Distribution gets CAP ABORT first so it stops sampling promptly
+        even if the ADE9000 abort blocks; both calls swallow exceptions
+        so neither device's state can mask the other's recovery.
         """
+        self._safe_dist_abort()
         self._safe_ade_abort()

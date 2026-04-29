@@ -75,10 +75,11 @@ class _ScanWorker(QThread):
 # ---------------------------------------------------------------------------
 
 class _ResetWorker(QThread):
-    """Re-arm Distribution out-of-band so its FSM goes back to IDLE/ARMED.
+    """Re-arm Distribution out-of-band so its FSM lands in ARMED.
 
-    Distribution FW has no CAP ABORT; an explicit ARM is the documented
-    way to reset the capture FSM (see orchestrator._abort_both). Runs in a
+    Sequence: MODE CMD → CAP ABORT → ARM. The CAP ABORT step (added once
+    the FW gained the command) lets this also recover from a stuck
+    CAPTURING state — earlier the only path was a power-cycle. Runs in a
     QThread because RS-485 timeouts can stall for several seconds when
     the link is genuinely down.
     """
@@ -96,10 +97,13 @@ class _ResetWorker(QThread):
             client.open(self._port, self._baudrate)
             try:
                 client.mode_cmd()
+                client.cap_abort()
                 client.arm()
             finally:
                 client.close()
-            self.finished.emit(True, "Distribution re-armed (FSM → IDLE → ARMED)")
+            self.finished.emit(
+                True, "Distribution re-armed (FSM → IDLE via CAP ABORT → ARMED)"
+            )
         except Exception as exc:
             self.finished.emit(False, str(exc))
 

@@ -525,6 +525,42 @@ class TestArm(unittest.TestCase):
         self.assertIn("ERR unknown", msg)
 
 
+class TestCapAbort(unittest.TestCase):
+    def test_success(self):
+        t = _FakeTransport()
+        t.push_replies("CAP ABORT ok")
+        DistributionClient(t).cap_abort()
+        self.assertEqual(t.sent[-1], "CAP ABORT")
+
+    def test_recovers_garbled_prefix(self):
+        # Same RS-485 garble pattern as ARM/MODE CMD: leading bytes mangled,
+        # trailing " OK" survives and is what the client keys on.
+        t = _FakeTransport()
+        t.push_replies("=\x11\x15\x1a5D ok")
+        DistributionClient(t).cap_abort()
+
+    def test_skips_evt_lines(self):
+        t = _FakeTransport()
+        t.push_replies("EVT: vbus_block tick=1234", "CAP ABORT ok")
+        client = DistributionClient(t)
+        client.cap_abort()
+        self.assertEqual(client.take_events(), ["EVT: vbus_block tick=1234"])
+
+    def test_retries_once_on_garbled_first_reply(self):
+        t = _FakeTransport()
+        t.push_replies("PSk")            # attempt 1: destroyed
+        t.push_replies("CAP ABORT ok")   # attempt 2: clean
+        DistributionClient(t).cap_abort(timeout=0.05)
+        self.assertEqual(t.sent.count("CAP ABORT"), 2)
+
+    def test_garbled_reply_times_out(self):
+        t = _FakeTransport()
+        t.push_replies("PSk")
+        t.push_replies("PSk")
+        with self.assertRaises(DistributionError):
+            DistributionClient(t).cap_abort(timeout=0.05)
+
+
 class TestStart(unittest.TestCase):
     def test_success(self):
         t = _FakeTransport()

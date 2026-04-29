@@ -66,6 +66,7 @@ class DistributionProtocol:
     CMD_EVENTS_ON  = "EVENTS ON"
     CMD_EVENTS_OFF = "EVENTS OFF"
     CMD_CAP_STATUS = "CAP STATUS"
+    CMD_CAP_ABORT  = "CAP ABORT"
 
     @staticmethod
     def cmd_cap_read(offset: int, count: int) -> str:
@@ -444,6 +445,19 @@ class DistributionClient:
         and skip mangled-prefix lines.  See mode_cmd() for the rationale.
         """
         self._send_recv_ok(DistributionProtocol.CMD_ARM, "ARM", timeout)
+
+    def cap_abort(self, timeout: float = 2.0) -> None:
+        """Abort capture: any state → IDLE on the FW side; verify ack.
+
+        Idempotent. Used by the orchestrator's error path to leave the
+        FSM in a defined state without rearming. Same garble-tolerant " OK"
+        tail policy as ARM / MODE CMD — RS-485 half-duplex switching can
+        mangle the leading bytes of "CAP ABORT ok"; the trailing " ok"
+        survives and is what we key on.
+        """
+        self._send_recv_ok(
+            DistributionProtocol.CMD_CAP_ABORT, "CAP ABORT", timeout
+        )
 
     def start(self, timeout: float = 5.0) -> None:
         """Send START. Raises VbusBlockError / StartAlreadyOnError on refusal."""

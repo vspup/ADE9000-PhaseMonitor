@@ -163,6 +163,7 @@ def _make_fake_dist(
         cap_read_result = _dist_samples()
     dist.cap_read.return_value = cap_read_result
 
+    dist.cap_abort.return_value = None
     return dist
 
 
@@ -393,12 +394,23 @@ class TestErrorHandling(unittest.TestCase):
             Orchestrator(_cfg(), ade, dist).run()
         self.assertIn("VBUS", str(cm.exception))
 
-    def test_vbus_error_aborts_ade9000(self):
+    def test_vbus_error_aborts_both(self):
         ade  = _make_fake_ade()
         dist = _make_fake_dist(start_result="vbus_error")
         with self.assertRaises(OrchestratorError):
             Orchestrator(_cfg(), ade, dist).run()
         ade.cap_abort.assert_called()
+        dist.cap_abort.assert_called()
+
+    def test_dist_error_state_aborts_dist(self):
+        # Distribution drain hits ERROR → orchestrator raises and the
+        # catch-all _abort_both must include cap_abort on Distribution
+        # so its FSM lands in IDLE before the next session.
+        ade  = _make_fake_ade()
+        dist = _make_fake_dist(cap_status_sequence=[_dist_cap_status(state="ERROR")])
+        with self.assertRaises(OrchestratorError):
+            Orchestrator(_cfg(), ade, dist).run()
+        dist.cap_abort.assert_called()
 
     def test_ports_closed_on_error(self):
         ade  = _make_fake_ade(wmode_capture_ok=False)

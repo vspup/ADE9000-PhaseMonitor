@@ -55,6 +55,7 @@ reading code.
 | "manual trigger" | `CAP TRIGGER` command | **does not exist** — trigger is the physical MAINS_REL event |
 | "capture complete" | async `cap_done` event | poll `CAP STATUS` until `state=READY` |
 | "read captured data" | `CAP READ` (streams JSON `cap_sample` rows) | `CAP READ <offset> <count>` (text: `idx` + 8× hex16 raw) |
+| "abort capture" | `CAP ABORT` command | `CAP ABORT` command (any state → IDLE; relay untouched) |
 | "async event channel" | event flags in every telemetry packet (`flags[]`) | `EVT:` prefix lines, gated by `EVENTS ON` |
 
 ### Orthogonality on Distribution
@@ -352,7 +353,7 @@ three files and produces a unified timeline using
 | Distribution returns `vbus_error` on `START` | START reply parse | Cancel session. `Capture_NotifyVbusBlock` fires on FW side — PC sends `CAP ABORT` to ADE9000, does NOT write CSV. Log reason. |
 | Distribution `EVT: vbus_block` during session (Phase 5, pending) | async line with `EVT:` prefix | Same as above — abort, log. |
 | ADE9000 `dip` arm times out (no dip within N seconds) | timer in PC orchestrator | Options: (a) send `CAP TRIGGER` manually and accept a degraded session, (b) `CAP ABORT` + retry. Configurable; default (a). |
-| Distribution `CAP STATUS` stays `CAPTURING` past `window × 1.5` | timeout on poll loop | `CAP ABORT`-equivalent (no command today — re-`ARM` clears to IDLE). Flag session as failed. |
+| Distribution `CAP STATUS` stays `CAPTURING` past `window × 1.5` | timeout on poll loop | Orchestrator's `_abort_both` issues `CAP ABORT` on Distribution (FSM → IDLE) and `CAP ABORT` on ADE9000. Session flagged as failed; no CSV. |
 | ADE9000 serial port disconnects mid-capture | serial error | `CAP ABORT` on Distribution. No partial CSV. |
 | Distribution serial port disconnects mid-capture | serial error | `CAP ABORT` on ADE9000. No partial CSV. |
 | One device never sends `cap_done` / never reaches READY | timeout | Abort both, do not write CSV. |
@@ -370,9 +371,6 @@ These are not blockers for PC orchestration v1, but need tracking:
 - **Distribution async `cap_done`.** Today PC polls `CAP STATUS`.
   An EVT-channel `EVT: cap_ready` would remove the poll. Scope:
   Phase 5 adjacent work.
-- **Distribution `CAP ABORT`.** Today there is no explicit abort;
-  re-`ARM` clears to IDLE. Explicit `CAP ABORT` would be cleaner
-  error-path contract.
 - **18V rail.** Intentionally excluded from CAP channels (unreliable,
   per TECH_SPEC §3.5). If later needed, surface as EVT on Distribution,
   not as an extra sample column.
