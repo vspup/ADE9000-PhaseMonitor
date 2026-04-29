@@ -52,6 +52,7 @@ focus modes, ADC channel filter, and click-to-place comparison markers.
 | `50622da` | feat(orchestrator): real Distribution SYNC offset, drop rtt/2 approximation |
 | `ae8d1fd` | feat(orchestrator): CAP ABORT on error path; Reset covers CAPTURING |
 | `32ab73e` | feat(viewer): export PNG snapshot + CSV slice between markers |
+| `883b74b` | refactor(db_tool): inherit DistributionProtocol from core, drop dup |
 
 ## Commits this session (dev, mps2p-FW-db-v3)
 
@@ -167,8 +168,6 @@ correctly. Older files without it are still readable (defaults to 0).
 | Medium | Distribution `sync_probe` needs 50 ms inter-probe gap (RS-485 DE-pin overlap on USB-RS485 adapter); without it ~80 % replies drop. Acceptable but worth revisiting if a faster adapter ships. |
 | Medium | `_Transport` duplicated in `ade9000_client.py` and `distribution_client.py` — extract to `core/serial_transport.py`. |
 | Medium | Viewer marker pane is fixed at 150 px — comfortable for typical use but clips two-marker pairs in both groups simultaneously (rare). Switch to `QScrollArea` if the case becomes common. |
-| Low | `db_tool.py` has own copy of `DistributionProtocol` — replace with import. |
-| Low | No `CAP ABORT` in Distribution FW — FSM stuck on error until reconnect. |
 
 ## Not yet implemented
 
@@ -209,9 +208,6 @@ orchestrator_tool.py
    Windows USB CDC tuning or raise `best_k` to reduce ~50 ms jitter
    in `offset_ad_ms`. Now that both sides ship a real SYNC, this is
    the dominant source of cross-device timing error.
-3. **`db_tool.py` dedup** (Low) — replace its private DistributionProtocol
-   copy with `from core.distribution_client import DistributionProtocol`.
-
 Done in this session:
 - Distribution `SYNC <seq>` (cross-repo `f6145a2` + `50622da`)
   replacing the `rtt/2` approximation. Hardware: 24/25 probes ok,
@@ -223,3 +219,6 @@ Done in this session:
 - Viewer Export (`32ab73e`): Save PNG (Ctrl+S, stitched plot rows) and
   Export CSV slice (Ctrl+E, M1..M2 between markers, channel-filtered).
   Default location `<repo>/data/`.
+- `db_tool.py` dedup (`883b74b`): private DistributionProtocol copy
+  replaced by subclass of `core.distribution_client.DistributionProtocol`.
+  −87 lines; tool inherits cap_abort / sync / lenient parsers for free.
