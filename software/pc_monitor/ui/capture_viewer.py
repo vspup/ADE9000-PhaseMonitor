@@ -48,7 +48,9 @@ Point markers:
 from __future__ import annotations
 
 import bisect
+import csv
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from matplotlib.axes import Axes
@@ -58,15 +60,17 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 
 from PySide6.QtCore import Qt, QSignalBlocker, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QToolButton,
@@ -75,7 +79,15 @@ from PySide6.QtWidgets import (
 )
 
 from core.distribution_client import CHANNEL_KEYS
+from core.exporter import slice_arduino, slice_distribution
 from core.orchestrator import CaptureSession
+
+
+# repo_root / "data" — user preference: store ad-hoc viewer exports next
+# to the existing measurement-log captures rather than under captures/
+# (the latter is reserved for full-session writes by session_writer).
+# parents indexing: ui/ → pc_monitor/ → software/ → <repo_root>.
+_DEFAULT_EXPORT_DIR = Path(__file__).resolve().parents[3] / "data"
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +171,14 @@ def _wrap_columns(items: list[str], per_line: int, indent: str) -> list[str]:
     for i in range(0, len(items), per_line):
         out.append(indent + "   ".join(items[i:i + per_line]))
     return out
+
+
+def _write_csv(path: Path, header: list[str], rows: list[list]) -> None:
+    """csv.writer round-trip with header. Caller decides target path."""
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +572,15 @@ class CaptureViewDialog(QDialog):
         period_ade  = done.sample_period_ms or 10
         period_dist = ds.sample_period_ms   or 25
 
+        # Source samples + cadence retained for CSV slice export
+        # (core.exporter.slice_*); kept on self so the export handlers
+        # don't need the full CaptureSession plumbed through.
+        self._arduino_samples = session.arduino_samples
+        self._dist_samples    = session.dist_samples
+        self._period_ade      = period_ade
+        self._period_dist     = period_dist
+        self._dist_trigger_idx = ds.trigger_idx
+
         self._t_ade  = [s.i * period_ade for s in session.arduino_samples]
         self._t_dist = [
             (idx - ds.trigger_idx) * period_dist
@@ -682,6 +711,24 @@ class CaptureViewDialog(QDialog):
         self._reset_btn.setToolTip("Auto-scale X and Y on every plot")
         self._reset_btn.clicked.connect(self._on_reset_view)
         h.addWidget(self._reset_btn)
+
+        self._save_png_btn = QPushButton("Save PNG…")
+        self._save_png_btn.setShortcut("Ctrl+S")
+        self._save_png_btn.setToolTip(
+            "Save the current plot view as a PNG (Ctrl+S)"
+        )
+        self._save_png_btn.clicked.connect(self._on_save_png)
+        h.addWidget(self._save_png_btn)
+
+        self._export_csv_btn = QPushButton("Export CSV slice…")
+        self._export_csv_btn.setShortcut("Ctrl+E")
+        self._export_csv_btn.setToolTip(
+            "Save samples between M1 and M2 to CSV (Ctrl+E). "
+            "Active when both markers are placed in at least one group."
+        )
+        self._export_csv_btn.setEnabled(False)
+        self._export_csv_btn.clicked.connect(self._on_export_csv)
+        h.addWidget(self._export_csv_btn)
         return bar
 
     # ---- Top bar (split into two rows) ----
@@ -990,6 +1037,12 @@ class CaptureViewDialog(QDialog):
         elif button == 1:
             self._place_marker(group, x_raw)
         self._update_marker_label()
+        self._update_export_state()
+
+    def _update_export_state(self) -> None:
+        """Enable Export CSV slice when at least one group has both markers."""
+        any_full_pair = any(len(g.xs) == 2 for g in self._mgroups)
+        self._export_csv_btn.setEnabled(any_full_pair)
 
     def _place_marker(self, group: _MarkerGroup, x_raw: float) -> None:
         idx    = _snap_index(group.times, x_raw)
@@ -1046,3 +1099,115 @@ class CaptureViewDialog(QDialog):
             out_lines.append("")
         text = "\n".join(out_lines).rstrip() if any_markers else _HINT_TEXT
         self._marker_lbl.setText(text)
+
+    # ---------------- Export ----------------
+
+    def _on_save_png(self) -> None:
+        """Save the three plot rows, stitched vertically, as a single PNG.
+
+        Uses QWidget.grab() so the snapshot mirrors what's on screen —
+        focus mode, channel filter, markers, current X/Y limits — at
+        the user's display density. No matplotlib re-render, no extra
+        dependencies. Hidden rows (Focus=V hides I and ADC) are skipped
+        so the output has no empty bands.
+        """
+        default = _DEFAULT_EXPORT_DIR / f"{self._session_id}__view.png"
+        try:
+            default.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Fall back to home if the target dir can't be created — the
+            # dialog still lets the user pick a writable location.
+            default = Path.home() / default.name
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save plot view as PNG", str(default), "PNG image (*.png)"
+        )
+        if not path:
+            return
+
+        rows = [r for r in (self._row_v, self._row_i, self._row_d) if r.isVisible()]
+        if not rows:
+            QMessageBox.warning(
+                self, "Save PNG", "All plot rows are hidden — nothing to save."
+            )
+            return
+
+        pixmaps = [r.grab() for r in rows]
+        total_h = sum(p.height() for p in pixmaps)
+        width   = max(p.width()  for p in pixmaps)
+        out = QPixmap(width, total_h)
+        out.fill(Qt.white)
+        painter = QPainter(out)
+        try:
+            y = 0
+            for pm in pixmaps:
+                painter.drawPixmap(0, y, pm)
+                y += pm.height()
+        finally:
+            painter.end()
+
+        if not out.save(path, "PNG"):
+            QMessageBox.critical(
+                self, "Save PNG", f"Could not write {path}"
+            )
+
+    def _on_export_csv(self) -> None:
+        """Save M1..M2 slice from each fully-marked group to a CSV file.
+
+        One QFileDialog asks for a single base name; the actual files
+        gain a `__arduino.csv` / `__distribution.csv` suffix per device.
+        Channel filter from the ADC checkbox row is applied — only
+        currently-visible channels make it into the Distribution slice.
+        """
+        ade_xs  = self._mgroups[0].xs if len(self._mgroups[0].xs) == 2 else None
+        dist_xs = self._mgroups[1].xs if len(self._mgroups[1].xs) == 2 else None
+        if ade_xs is None and dist_xs is None:
+            return  # button shouldn't have been enabled
+
+        default = _DEFAULT_EXPORT_DIR / f"{self._session_id}__M1_M2.csv"
+        try:
+            default.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            default = Path.home() / default.name
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, "Export CSV slice (base name)",
+            str(default), "CSV (*.csv)"
+        )
+        if not chosen:
+            return
+        # Strip a single trailing .csv so we can graft per-device suffixes.
+        base = Path(chosen)
+        if base.suffix.lower() == ".csv":
+            base = base.with_suffix("")
+
+        written: list[Path] = []
+        try:
+            if ade_xs is not None:
+                header, rows = slice_arduino(
+                    self._arduino_samples, self._period_ade,
+                    ade_xs[0], ade_xs[1],
+                )
+                p = base.with_name(base.name + "__arduino.csv")
+                _write_csv(p, header, rows)
+                written.append(p)
+            if dist_xs is not None:
+                channel_filter = {
+                    k for k, cb in self._ch_checks.items() if cb.isChecked()
+                }
+                header, rows = slice_distribution(
+                    self._dist_samples, self._dist_trigger_idx,
+                    self._period_dist, dist_xs[0], dist_xs[1],
+                    channel_filter=channel_filter,
+                )
+                p = base.with_name(base.name + "__distribution.csv")
+                _write_csv(p, header, rows)
+                written.append(p)
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Export CSV slice", f"Write failed:\n{exc}"
+            )
+            return
+
+        QMessageBox.information(
+            self, "Export CSV slice",
+            "Wrote:\n" + "\n".join(str(p) for p in written),
+        )
