@@ -53,6 +53,7 @@ focus modes, ADC channel filter, and click-to-place comparison markers.
 | `ae8d1fd` | feat(orchestrator): CAP ABORT on error path; Reset covers CAPTURING |
 | `32ab73e` | feat(viewer): export PNG snapshot + CSV slice between markers |
 | `883b74b` | refactor(db_tool): inherit DistributionProtocol from core, drop dup |
+| `e71b2bc` | feat(ui): grey indicator until verified + per-device log colours |
 
 ## Commits this session (dev, mps2p-FW-db-v3)
 
@@ -222,3 +223,8 @@ Done in this session:
 - `db_tool.py` dedup (`883b74b`): private DistributionProtocol copy
   replaced by subclass of `core.distribution_client.DistributionProtocol`.
   −87 lines; tool inherits cap_abort / sync / lenient parsers for free.
+- UI polish (`e71b2bc`): port indicators stay grey until verified by
+  Scan probe / CONNECT handshake / Reset, fixing the "config-restored
+  port shows green from second one" regression noted by user.
+  Progress log gets per-device muted colours (Arduino ochre,
+  Distribution teal) for faster scanning.
