@@ -49,6 +49,7 @@ focus modes, ADC channel filter, and click-to-place comparison markers.
 | `58b4f00` | fix(viewer): marker pane — invisible on dark theme + plots jumped on marker place |
 | `eba89a3` | chore: refresh PROGRESS — viewer feature inventory, 234 tests, next actions |
 | (this)    | feat: session browser (reader + dialog) + Reset Distribution recovery button |
+| `50622da` | feat(orchestrator): real Distribution SYNC offset, drop rtt/2 approximation |
 
 ## Commits this session (dev, mps2p-FW-db-v3)
 
@@ -56,12 +57,12 @@ focus modes, ADC channel filter, and click-to-place comparison markers.
 |--------|------|
 | `37c8fa5` | fix: s_cap_tx 96→128 B (CAP STATUS truncated trigger_tick) |
 | `76a3513` | feat: Phase 5 EVT wiring — vbus_block + RS485_U1_EmitEvent docs |
+| `f6145a2` | feat(rs485): SYNC <seq> for PC clock-offset estimation |
 
 ## Test status
 
 ```
-266 passed   (≈8 s, with PySide6 deps)
-258 passed, 1 skipped   (without PySide6)
+300 passed, 1 skipped   (≈12 s, with PySide6 deps)
 python -m pytest tests/  from software/pc_monitor/
 ```
 
@@ -69,21 +70,22 @@ Tests by file (collected count, latest run):
 
 | File | Tests |
 |------|-------|
-| `test_distribution_client.py` | 52 |
+| `test_distribution_client.py` | 75 |
 | `test_ade9000_client.py` | 36 |
-| `test_orchestrator.py` | 26 |
-| `test_session_writer.py` | 33 |
-| `test_session_reader.py` | 24 |
+| `test_orchestrator.py` | 28 |
+| `test_session_writer.py` | 35 |
+| `test_session_reader.py` | 26 |
 | `test_orchestrator_worker.py` | 8 |
-| `test_port_scanner.py` | 35 |
-| `test_capture_parser.py` | 20 |
-| `test_packet_parser.py` | 12 |
-| `test_sync_probe.py` | 9 |
-| (others)                      | 3 |
+| `test_port_scanner.py` | 36 |
+| `test_capture_parser.py` | 21 |
+| `test_packet_parser.py` | 13 |
+| `test_sync_probe.py` | 7 |
+| `test_serial_transport.py` | 15 |
 
-Net delta vs 04-28 PROGRESS snapshot: +24 tests (`test_session_reader.py` —
-round-trip writer↔reader, legacy `session.json` without `trigger_idx`,
-list-sessions filtering and sorting, error paths).
+Net delta vs 04-28 PROGRESS snapshot: +58 tests overall.
+Latest +34 from this session: `parse_sync` ×7, `cmd_sync`, `sync_probe` ×7,
+`dist_sync` orchestrator wiring, schema-v2 round-trip + schema-v1 legacy
+compat in session writer/reader.
 
 ## Capture viewer — feature inventory
 
@@ -160,7 +162,7 @@ correctly. Older files without it are still readable (defaults to 0).
 | Priority | Issue |
 |----------|-------|
 | High | ADE9000 RTT_best 96–110 ms (Windows USB latency) → ~50 ms jitter in `offset_ad_ms`. Investigate USB CDC latency or increase `best_k`. |
-| Medium | `dist_offset_ms = rtt/2` approximation — needs `SYNC <seq>` in Distribution FW. |
+| Medium | Distribution `sync_probe` needs 50 ms inter-probe gap (RS-485 DE-pin overlap on USB-RS485 adapter); without it ~80 % replies drop. Acceptable but worth revisiting if a faster adapter ships. |
 | Medium | `_Transport` duplicated in `ade9000_client.py` and `distribution_client.py` — extract to `core/serial_transport.py`. |
 | Medium | Viewer marker pane is fixed at 150 px — comfortable for typical use but clips two-marker pairs in both groups simultaneously (rare). Switch to `QScrollArea` if the case becomes common. |
 | Low | `db_tool.py` has own copy of `DistributionProtocol` — replace with import. |
@@ -168,7 +170,6 @@ correctly. Older files without it are still readable (defaults to 0).
 
 ## Not yet implemented
 
-- **Distribution SYNC command**: proper clock offset (currently `rtt/2`).
 - **Export from viewer**: PNG snapshot / CSV slice between markers.
 - **Distribution `CAP ABORT`** (FW-side): would let `_abort_both` cancel a
   CAPTURING session cleanly; today the UI Reset button covers most of
@@ -206,13 +207,13 @@ orchestrator_tool.py
    `ade9000_client.py` and `distribution_client.py` stop carrying
    ~70 lines of duplicate transport code each. Parameterise on
    encoding, line terminator, and the post-open flush hack.
-2. **Distribution `SYNC <seq>`** — replace the `rtt/2` offset with a
-   real probe; coordinate with `mps2p-FW-db-v3/`.
-3. **Export from viewer** — PNG snapshot of the current view, plus a
+2. **Export from viewer** — PNG snapshot of the current view, plus a
    CSV slice between M1/M2 if both are placed.
-4. **Decide marker pane fate** — confirm the 150 px reserved height
+3. **Decide marker pane fate** — confirm the 150 px reserved height
    feels right on a real-data run; switch to `QScrollArea` only if
    the user actually hits the clip case.
 
-Done in this session: session browser (1), Reset Distribution
-recovery flow (2 of the previous list).
+Done in this session: Distribution `SYNC <seq>` (cross-repo with
+`mps2p-FW-db-v3` `f6145a2`) replacing the `rtt/2` approximation.
+Hardware verified on COM3: 24/25 probes ok, RTT_best ~50 ms,
+stable offset; sequencer.md §3.4 / §6.3 / §7 updated accordingly.
